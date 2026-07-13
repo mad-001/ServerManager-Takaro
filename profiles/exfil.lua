@@ -1,42 +1,20 @@
 -- EXFIL profile for ServerManager-Takaro
--- Engine: ue5. Confidence: low (module name guessed from title).
--- WHAT WORKS OUT OF THE BOX (no live confirmation needed): player join/leave, roster /
---   getPlayers, and death (via the universal core's FindAllOf("PlayerState") roster).
--- CHAT is best-effort: the core probes the candidate hooks below on your live server and
---   uses whichever exists. If none resolve, dump the game's UFunctions with UE4SS
---   (Objects dumper) and set an explicit chat.hook. The /Script module was guessed as 'Exfil' from the game title and is very likely wrong for chat — expect to set chat.hook after a UFunction dump.
-
-local function genericExtract(self, param)
-    local ok, s = pcall(function() return param:get() end)
-    local obj = ok and s or param
-    local function str(v) local o, r = pcall(function() return v:ToString() end); return o and r or nil end
-    local name, msg
-    for _, k in ipairs({ "Sender", "PlayerName", "Name", "From", "SenderName" }) do
-        local o, v = pcall(function() return obj[k] end); if o and v then name = str(v) or name end
-        if name then break end
-    end
-    for _, k in ipairs({ "Message", "Text", "Msg", "Content", "ChatMessage" }) do
-        local o, v = pcall(function() return obj[k] end); if o and v then msg = str(v) or msg end
-        if msg then break end
-    end
-    return name, msg, "global"
-end
+-- Engine: ue5. Chat is auto-discovered at runtime; confirm on your server.
+--
+-- Player join/leave, roster, getPlayers and death work with NO changes here — the core
+-- uses the engine-standard FindAllOf("PlayerState") roster. Chat is auto-discovered at
+-- runtime by probing this game's real GameState/PlayerController classes for common chat
+-- functions. If chat does not appear in Takaro, dump this game's UFunctions with UE4SS
+-- (Objects dumper) and set an explicit hook below.
 
 return {
     name = "EXFIL",
-    -- players()/join/leave/death: handled by the universal core. Override here only if the
-    -- universal PlayerState roster misses this game.
-    chat = {
-        candidates = {
-            "/Script/Exfil.ExfilGameStateInGame:BroadcastChatMessage",
-            "/Script/Exfil.ExfilGameState:BroadcastChatMessage",
-            "/Script/Exfil.ExfilGameState:Multicast_ChatMessage",
-            "/Script/Exfil.ExfilPlayerController:ClientReceiveChatMessage",
-            "/Script/Exfil.ExfilPlayerController:ServerSendChatMessage",
-            "/Script/Exfil.ExfilGameMode:ReceiveChatMessage",
-            "/Script/Exfil.ExfilPlayerController:ServerSay",
-            "/Script/Exfil.ExfilPlayerController:ClientMessage"
-        },
-        extract = genericExtract,
-    },
+    -- To pin chat manually, uncomment and set the real UFunction path + field names:
+    -- chat = {
+    --     hook = "/Script/<Module>.<GameStateClass>:<ChatFunction>",
+    --     extract = function(self, param)
+    --         local m = param:get()
+    --         return m.Sender:ToString(), m.Message:ToString(), "global"
+    --     end,
+    -- },
 }

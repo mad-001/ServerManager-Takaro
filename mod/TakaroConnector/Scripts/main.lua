@@ -132,10 +132,14 @@ end
 
 local function installChat()
     local spec = profile.chat
-    if not spec then spec = autodetect.chat() end
-    if not spec then log("Chat: no spec (profile.chat missing + auto-detect found none)"); return end
-    spec.hook = resolveHook(spec)
-    if not spec.hook then return end
+    if spec then
+        spec.hook = resolveHook(spec)
+        -- profile chat given but nothing resolved -> fall back to universal runtime discovery
+        if not spec.hook then spec = autodetect.chat() end
+    else
+        spec = autodetect.chat()   -- no profile chat: universal runtime discovery
+    end
+    if not spec or not spec.hook then log("Chat: no hook resolved (roster/join/leave still work)"); return end
     local ok, err = pcall(function()
         RegisterHook(spec.hook, function(self, a, b, c)
             local sok, serr = pcall(function()

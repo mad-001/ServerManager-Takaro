@@ -37,15 +37,57 @@ local function resolves(path)
     return ok and o and o:IsValid()
 end
 
--- Returns a chat spec {hook, extract} or nil.
+-- Common chat-broadcast/receive UFunction short names, tried against the game's REAL
+-- classes (discovered at runtime), newest/most-specific first.
+local CHAT_FUNCS = {
+    "BroadcastChatMessage", "ServerBroadcastChatMessage", "Multicast_ChatMessage",
+    "ReceiveChatMessage", "ClientReceiveChatMessage", "ServerSendChatMessage",
+    "OnChatMessage", "AddChatMessage", "HandleChatMessage", "ServerSay",
+    "ServerChat", "ClientMessage", "BroadcastMessage",
+}
+
+-- Turn a live object's class into its /Script path, e.g.
+--   "Class /Script/Pal.PalGameStateInGame" -> "/Script/Pal.PalGameStateInGame"
+local function classPath(obj)
+    local ok, full = pcall(function() return obj:GetClass():GetFullName() end)
+    if not ok or not full then return nil end
+    return full:match("%s(/[%w_%./]+)$") or full:match("(/[%w_%./]+)$")
+end
+
+-- Discover the game's real GameState / GameMode / PlayerController / PlayerState classes
+-- from live instances — no per-game guessing needed.
+local function discoverClasses()
+    local paths, seen = {}, {}
+    for _, cls in ipairs({ "GameStateBase", "GameState", "GameModeBase", "GameMode",
+                           "PlayerController", "PlayerState" }) do
+        local ok, inst = pcall(function() return FindFirstOf(cls) end)
+        if ok and inst and inst:IsValid() then
+            local p = classPath(inst)
+            if p and not seen[p] then seen[p] = true; paths[#paths + 1] = p end
+        end
+    end
+    return paths
+end
+
+-- Returns a chat spec {hook, extract} or nil. First tries the game's real classes ×
+-- common chat function names, then the hard-coded candidate list.
 function M.chat()
+    for _, base in ipairs(discoverClasses()) do
+        for _, fn in ipairs(CHAT_FUNCS) do
+            local path = base .. ":" .. fn
+            if resolves(path) then
+                print("[Takaro] auto-detect: chat resolved -> " .. path)
+                return { hook = path, extract = genericExtract }
+            end
+        end
+    end
     for _, path in ipairs(CHAT_CANDIDATES) do
         if resolves(path) then
             print("[Takaro] auto-detect: chat candidate resolves -> " .. path)
             return { hook = path, extract = genericExtract }
         end
     end
-    print("[Takaro] auto-detect: no known chat UFunction resolved — write profile.chat for this game")
+    print("[Takaro] auto-detect: no chat UFunction resolved — dump UFunctions and set profile.chat.hook")
     return nil
 end
 

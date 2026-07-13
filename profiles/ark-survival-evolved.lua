@@ -1,42 +1,20 @@
 -- ARK: Survival Evolved profile for ServerManager-Takaro
--- Engine: ue4. Confidence: medium (known /Script module).
--- WHAT WORKS OUT OF THE BOX (no live confirmation needed): player join/leave, roster /
---   getPlayers, and death (via the universal core's FindAllOf("PlayerState") roster).
--- CHAT is best-effort: the core probes the candidate hooks below on your live server and
---   uses whichever exists. If none resolve, dump the game's UFunctions with UE4SS
---   (Objects dumper) and set an explicit chat.hook. Module 'ShooterGame' is the game's real /Script module.
-
-local function genericExtract(self, param)
-    local ok, s = pcall(function() return param:get() end)
-    local obj = ok and s or param
-    local function str(v) local o, r = pcall(function() return v:ToString() end); return o and r or nil end
-    local name, msg
-    for _, k in ipairs({ "Sender", "PlayerName", "Name", "From", "SenderName" }) do
-        local o, v = pcall(function() return obj[k] end); if o and v then name = str(v) or name end
-        if name then break end
-    end
-    for _, k in ipairs({ "Message", "Text", "Msg", "Content", "ChatMessage" }) do
-        local o, v = pcall(function() return obj[k] end); if o and v then msg = str(v) or msg end
-        if msg then break end
-    end
-    return name, msg, "global"
-end
+-- Engine: ue4. Real /Script module: ShooterGame (chat function name still needs a live check).
+--
+-- Player join/leave, roster, getPlayers and death work with NO changes here — the core
+-- uses the engine-standard FindAllOf("PlayerState") roster. Chat is auto-discovered at
+-- runtime by probing this game's real GameState/PlayerController classes for common chat
+-- functions. If chat does not appear in Takaro, dump this game's UFunctions with UE4SS
+-- (Objects dumper) and set an explicit hook below.
 
 return {
     name = "ARK: Survival Evolved",
-    -- players()/join/leave/death: handled by the universal core. Override here only if the
-    -- universal PlayerState roster misses this game.
-    chat = {
-        candidates = {
-            "/Script/ShooterGame.ShooterGameGameStateInGame:BroadcastChatMessage",
-            "/Script/ShooterGame.ShooterGameGameState:BroadcastChatMessage",
-            "/Script/ShooterGame.ShooterGameGameState:Multicast_ChatMessage",
-            "/Script/ShooterGame.ShooterGamePlayerController:ClientReceiveChatMessage",
-            "/Script/ShooterGame.ShooterGamePlayerController:ServerSendChatMessage",
-            "/Script/ShooterGame.ShooterGameGameMode:ReceiveChatMessage",
-            "/Script/ShooterGame.ShooterGamePlayerController:ServerSay",
-            "/Script/ShooterGame.ShooterGamePlayerController:ClientMessage"
-        },
-        extract = genericExtract,
-    },
+    -- To pin chat manually, uncomment and set the real UFunction path + field names:
+    -- chat = {
+    --     hook = "/Script/ShooterGame.ShooterGameGameState:BroadcastChatMessage",
+    --     extract = function(self, param)
+    --         local m = param:get()
+    --         return m.Sender:ToString(), m.Message:ToString(), "global"
+    --     end,
+    -- },
 }
