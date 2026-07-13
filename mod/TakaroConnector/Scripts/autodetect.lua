@@ -44,6 +44,12 @@ local CHAT_FUNCS = {
     "ReceiveChatMessage", "ClientReceiveChatMessage", "ServerSendChatMessage",
     "OnChatMessage", "AddChatMessage", "HandleChatMessage", "ServerSay",
     "ServerChat", "ClientMessage", "BroadcastMessage",
+    -- broadened for the sweep: more shipped-game chat entry points
+    "Server_SendChatMessage", "ServerSendMessage", "OnReceiveChatMessage",
+    "ReceiveMessage", "OnChatMessageReceived", "SendChatMessage", "SendChat",
+    "ClientReceiveMessage", "Multicast_OnChatMessage", "RPC_ChatMessage",
+    "ServerPostChatMessage", "PostChatMessage", "NewChatMessage", "OnMessageReceived",
+    "ChatMessageReceived", "Server_Chat", "Client_Chat", "AddChatMessage_Multicast",
 }
 
 -- Turn a live object's class into its /Script path, e.g.
@@ -91,8 +97,50 @@ function M.chat()
     return nil
 end
 
--- Death is normally handled by the roster death-count diff in main.lua, so return nil.
+-- Common death UFunction short names, tried against the game's real character classes.
+local DEATH_FUNCS = {
+    "OnDeadPlayer_Server", "OnDeadCharacter", "OnDead", "OnDeath", "OnDying",
+    "HandleDeath", "Died", "Die", "Death", "ServerDie", "K2_OnDeath",
+    -- broadened for the sweep
+    "OnPlayerDeath", "OnPlayerDied", "OnCharacterDeath", "OnCharacterDied",
+    "HandlePlayerDeath", "PlayerDied", "ServerOnDeath", "Multicast_OnDeath",
+    "OnDeathEvent", "NotifyDeath", "OnKilled", "Killed", "HandleDdeath_Server",
+    "OnPawnDied", "ServerDeath", "Client_OnDeath",
+}
+
+-- Discover a death hook generically: probe common death function names against the
+-- game's live character/pawn/playerstate classes. Returns {hook, extract} or nil so
+-- main.lua falls back to the roster death-count diff.
 function M.death()
+    local bases = {}
+    for _, cls in ipairs({ "Character", "Pawn", "PlayerState", "PlayerController" }) do
+        local ok, inst = pcall(function() return FindFirstOf(cls) end)
+        if ok and inst and inst:IsValid() then
+            local ok2, full = pcall(function() return inst:GetClass():GetFullName() end)
+            if ok2 and full then
+                local p = full:match("%s(/[%w_%./]+)$")
+                if p then bases[#bases + 1] = p end
+            end
+        end
+    end
+    for _, base in ipairs(bases) do
+        for _, fn in ipairs(DEATH_FUNCS) do
+            local path = base .. ":" .. fn
+            local ok, o = pcall(function() return StaticFindObject(path) end)
+            if ok and o and o:IsValid() then
+                print("[Takaro] auto-detect: death resolved -> " .. path)
+                return {
+                    hook = path,
+                    extract = function(self)
+                        local nm
+                        pcall(function() nm = self.PlayerState.PlayerNamePrivate:ToString() end)
+                        if not nm then pcall(function() nm = self:GetPlayerName():ToString() end) end
+                        return nm, nm
+                    end,
+                }
+            end
+        end
+    end
     return nil
 end
 
