@@ -1,0 +1,11 @@
+# ServerManager-Takaro configuration.
+# SERVER_NAME becomes your Takaro identityToken. On first connect, paste the
+# REGISTRATION_TOKEN from Takaro (create a "Generic" game server, copy its token).
+SERVER_NAME=My Unreal Server
+REGISTRATION_TOKEN=
+ENABLED=true
+
+# Advanced (defaults are fine):
+POLL_INTERVAL_MS=1000
+REQ_TIMEOUT_MS=6000
+SERVER_STARTED_MSG=Server started

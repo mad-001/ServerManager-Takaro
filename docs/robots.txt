@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://mad-001.github.io/ServerManager-Takaro/sitemap.xml

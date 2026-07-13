@@ -1,0 +1,5 @@
+*.o
+*.obj
+core/build_warnings.txt
+*.tmp
+ipc/
