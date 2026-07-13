@@ -1,0 +1,192 @@
+# Sweep Results — automated UE4SS compatibility test
+
+Every in-scope game (confirmed UE + undetermined-engine) was downloaded, booted with
+UE4SS + the ServerManager-Takaro mod, and observed. Result tiers:
+
+- **VERIFIED (1)** — full live hooks discovered
+- **MOD-OK (52)** — UE4SS + our connector load cleanly = confirmed compatible;
+  deploy on a live server (with players) and chat/death hooks auto-discover
+- PARTIAL (81) — Unreal exe present but UE4SS injection didn't confirm (often anti-tamper or the server exits before init)
+- NOT-UE (34) — confirmed **not** Unreal Engine (resolved from 'undetermined')
+- FAILED (119) — dedicated server not anonymously downloadable (ownership-gated)
+- SKIPPED (8) — anti-cheat/oversized (ARK, SCUM, …) that lock their install
+
+## ✅ VERIFIED — live hooks (1)
+
+- Palworld
+
+## ✅ MOD-OK — confirmed UE4SS-compatible (52)
+
+- Abiotic Factor
+- BattleRush
+- Beyond The Wire
+- Birthright
+- Capsa
+- Citadel: Forged With Fire
+- Codename CURE II
+- Conan Exiles
+- Day of Dragons
+- Days of War: Definitive Edition
+- Dragonhold
+- Dragons Legacy
+- Duckoleon
+- EXFIL
+- FPV Kamikaze Drone
+- Fight or Flight
+- Fog Of War - Free Edition
+- Fog of War
+- Gemini: Binary Conflict
+- Ground Branch
+- Hanako: Honor & Blade
+- Hell Let Loose
+- HumanitZ
+- Icarus
+- Journey Of Life
+- Lightphobe
+- Midnight Ghost Hunt
+- Neptune: Arena FPS
+- Night of the Dead
+- Power
+- Powerjackers - VR Superhero Battle Royale
+- Rem Survival
+- Renown
+- Riftborn
+- RuneScape: Dragonwilds
+- Sanctuary Island
+- ScrewUp
+- Spoils of Plunder
+- Squad 44
+- StarRupture
+- StickyBots
+- TerraTech Worlds
+- The Bus
+- The Isle
+- The Lord of the Rings: Return to Moria
+- Tower Unite
+- Ultimate Arena FPS
+- Unfortunate Spacemen
+- Vector Strike
+- Voyagers of Nera
+- Wild Omission
+- Windrose
+
+## ⚠️ PARTIAL — Unreal but injection unconfirmed (81)
+
+- ARK: Survival Ascended
+- ARK: Survival Evolved
+- ARK: The Survival Of The Fittest
+- Ancestors Legacy
+- Animalia Survival
+- Astro Colony
+- Athos
+- BATTALION: Legacy
+- BULLETGROUNDS
+- BattleRush 2
+- Beasts of Bermuda
+- Beyond Enemy Lines 2 Enhanced Edition
+- Blood Oath: When The Sword Rises
+- DeadPoly
+- Desynced
+- Draconia
+- Duckside
+- Dysterra
+- EonBlade
+- Evolution Survival
+- Fadeout: Underground
+- HAINYA WORLD
+- HYPERCHARGE: Unboxed
+- Heat
+- Iron Armada
+- Isles of Yore
+- Jetball
+- Karagon (Survival Robot Riding FPS)
+- Key To Heaven
+- Life is Feudal: Your Own
+- Logic World
+- Memories of Mars
+- Mod and Play
+- Mount & Blade II: Bannerlord
+- NS2: Combat
+- Nienix: Cosmic Warfare
+- Nightingale
+- No Love Lost
+- No One Survived
+- Nuclear Option
+- Onset
+- Operation: Harsh Doorstop
+- Operation: Harsh Doorstop "Closed Beta"
+- Outpost Zero
+- OverShoot Battle Race
+- Paint Royale
+- Prime & Load : 1776
+- QANGA
+- Ravenous Horde
+- Right to Rule
+- Romestead
+- SCP: 5K
+- SCP: Containment Breach 2
+- Sapiens
+- Satisfactory
+- Savage Resurrection
+- Scramble Knights Online
+- ShatterRush
+- Ships At Sea
+- Smalland: Survive the Wilds
+- Soldat
+- Sphere Shootout
+- Spoxel
+- Squad
+- Starground
+- Swords 'n Magic and Stuff
+- Talvisota - Winter War
+- Task Force
+- The Front
+- Toaster Arena
+- TrickShot
+- UniverCity
+- VEIN
+- VERTEX
+- Voxel Turf
+- Warfare 1944
+- Wurm Unlimited
+- Yargis - Space Melee
+- Zero G Arena
+- nanos world™
+- pla_toon
+
+## ❌ NOT Unreal Engine (34)
+
+- '83
+- Deep Dark Forest
+- Fragsurf
+- Frontier Legends
+- GRIMWAR
+- Infinite Progression
+- Insane Town
+- Karl BOOM
+- LandTraveller
+- Lost Isle
+- Neo Tokyo Rush
+- ORMOD: Directive
+- Pavlov VR
+- Perfect Heist 2
+- Pillage
+- Plains of Pain
+- Poly Plaza
+- Project Dimension
+- Puck
+- RIP
+- Ramshackle
+- RefleX
+- Rock Hoppers
+- SCP: EVENT CLASSIFIED
+- SCP: Echoes
+- SRX
+- Solace Crafting
+- Starbound
+- Stars End
+- Stickforge
+- Survived
+- Trianga's Project: Battle Splash 2.0
+- Turbo Force
+- Voice of Chernobyl
