@@ -35,7 +35,13 @@ return {
     },
 
     death = {
-        hook = "/Script/Pal.PalPlayerCharacter:OnDeath",
+        -- Verified by live UFunction dump: OnDeath does NOT exist; the real server-side
+        -- player death is OnDeadPlayer_Server (fallbacks confirmed present on the build).
+        candidates = {
+            "/Script/Pal.PalPlayerCharacter:OnDeadPlayer_Server",
+            "/Script/Pal.PalPlayerCharacter:OnDyingDeadEnd_Server",
+            "/Script/Pal.PalCharacter:OnDeadCharacter",
+        },
         extract = function(character)
             if character and character:IsValid() and character.PlayerState and character.PlayerState:IsValid() then
                 local n = nameOf(character.PlayerState)

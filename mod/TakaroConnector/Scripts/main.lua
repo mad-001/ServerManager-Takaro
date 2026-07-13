@@ -87,8 +87,9 @@ end
 
 local function publishRosterAndDiff()
     local list = getRoster()
-    -- publish for the DLL's getPlayers
-    writeAtomic(TC.PLAYERS, json.encode(list))
+    -- publish for the DLL's getPlayers (force [] for an empty roster — an empty Lua
+    -- table would encode as {} and the DLL only accepts a JSON array)
+    writeAtomic(TC.PLAYERS, (#list == 0) and "[]" or json.encode(list))
     -- diff for join / leave / death
     local current = {}
     for _, p in ipairs(list) do
@@ -121,11 +122,11 @@ local function resolveHook(spec)
         for _, path in ipairs(spec.candidates) do
             local ok, o = pcall(function() return StaticFindObject(path) end)
             if ok and o and o:IsValid() then
-                log("chat: candidate resolved -> " .. path)
+                log("hook resolved -> " .. path)
                 return path
             end
         end
-        log("chat: none of " .. #spec.candidates .. " candidate hooks resolved — dump UFunctions and set profile.chat.hook")
+        log("none of " .. #spec.candidates .. " candidate hooks resolved")
     end
     return nil
 end
@@ -161,7 +162,9 @@ end
 local function installDeath()
     local spec = profile.death
     if not spec then spec = autodetect.death() end
-    if not spec or not spec.hook then log("Death: no hook (using roster death-count diff if available)"); return end
+    if not spec then log("Death: no spec (using roster death-count diff if available)"); return end
+    spec.hook = resolveHook(spec)   -- supports spec.hook or spec.candidates
+    if not spec.hook then log("Death: no hook resolved (roster diff still applies)"); return end
     local ok, err = pcall(function()
         RegisterHook(spec.hook, function(self, a, b, c)
             local sok, serr = pcall(function()
