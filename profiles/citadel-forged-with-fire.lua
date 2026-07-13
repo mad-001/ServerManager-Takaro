@@ -1,0 +1,42 @@
+-- Citadel: Forged With Fire profile for ServerManager-Takaro
+-- Engine: ue4. Confidence: medium (known /Script module).
+-- WHAT WORKS OUT OF THE BOX (no live confirmation needed): player join/leave, roster /
+--   getPlayers, and death (via the universal core's FindAllOf("PlayerState") roster).
+-- CHAT is best-effort: the core probes the candidate hooks below on your live server and
+--   uses whichever exists. If none resolve, dump the game's UFunctions with UE4SS
+--   (Objects dumper) and set an explicit chat.hook. Module 'Wizard' is the game's real /Script module.
+
+local function genericExtract(self, param)
+    local ok, s = pcall(function() return param:get() end)
+    local obj = ok and s or param
+    local function str(v) local o, r = pcall(function() return v:ToString() end); return o and r or nil end
+    local name, msg
+    for _, k in ipairs({ "Sender", "PlayerName", "Name", "From", "SenderName" }) do
+        local o, v = pcall(function() return obj[k] end); if o and v then name = str(v) or name end
+        if name then break end
+    end
+    for _, k in ipairs({ "Message", "Text", "Msg", "Content", "ChatMessage" }) do
+        local o, v = pcall(function() return obj[k] end); if o and v then msg = str(v) or msg end
+        if msg then break end
+    end
+    return name, msg, "global"
+end
+
+return {
+    name = "Citadel: Forged With Fire",
+    -- players()/join/leave/death: handled by the universal core. Override here only if the
+    -- universal PlayerState roster misses this game.
+    chat = {
+        candidates = {
+            "/Script/Wizard.WizardGameStateInGame:BroadcastChatMessage",
+            "/Script/Wizard.WizardGameState:BroadcastChatMessage",
+            "/Script/Wizard.WizardGameState:Multicast_ChatMessage",
+            "/Script/Wizard.WizardPlayerController:ClientReceiveChatMessage",
+            "/Script/Wizard.WizardPlayerController:ServerSendChatMessage",
+            "/Script/Wizard.WizardGameMode:ReceiveChatMessage",
+            "/Script/Wizard.WizardPlayerController:ServerSay",
+            "/Script/Wizard.WizardPlayerController:ClientMessage"
+        },
+        extract = genericExtract,
+    },
+}

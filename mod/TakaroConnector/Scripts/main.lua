@@ -76,9 +76,11 @@ local autodetect = require("autodetect")
 
 -- ── Player roster + join/leave/death diffing ──────────────────────────────────
 -- profile.players() must return an array of { gameId, name, steamId?, platformId?, deaths? }.
+-- Falls back to the universal FindAllOf("PlayerState") roster when the profile has none,
+-- so join/leave/getPlayers work on almost any UE game with no per-game code.
 local function getRoster()
-    if type(profile.players) ~= "function" then return {} end
-    local ok, list = pcall(profile.players)
+    local fn = (type(profile.players) == "function") and profile.players or autodetect.players
+    local ok, list = pcall(fn)
     if not ok or type(list) ~= "table" then return {} end
     return list
 end
@@ -111,10 +113,29 @@ local function publishRosterAndDiff()
 end
 
 -- ── Chat + death hooks (profile-driven, else auto-detected) ───────────────────
+-- Resolve spec.hook: if the profile gave an explicit hook use it; otherwise probe
+-- spec.candidates (a list of "/Script/..." paths) live and pick the first that exists.
+local function resolveHook(spec)
+    if spec.hook then return spec.hook end
+    if type(spec.candidates) == "table" then
+        for _, path in ipairs(spec.candidates) do
+            local ok, o = pcall(function() return StaticFindObject(path) end)
+            if ok and o and o:IsValid() then
+                log("chat: candidate resolved -> " .. path)
+                return path
+            end
+        end
+        log("chat: none of " .. #spec.candidates .. " candidate hooks resolved — dump UFunctions and set profile.chat.hook")
+    end
+    return nil
+end
+
 local function installChat()
     local spec = profile.chat
     if not spec then spec = autodetect.chat() end
-    if not spec or not spec.hook then log("Chat: no hook (profile.chat missing + auto-detect found none)"); return end
+    if not spec then log("Chat: no spec (profile.chat missing + auto-detect found none)"); return end
+    spec.hook = resolveHook(spec)
+    if not spec.hook then return end
     local ok, err = pcall(function()
         RegisterHook(spec.hook, function(self, a, b, c)
             local sok, serr = pcall(function()

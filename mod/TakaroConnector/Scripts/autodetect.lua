@@ -54,4 +54,30 @@ function M.death()
     return nil
 end
 
+-- UNIVERSAL roster — works on almost any Unreal game with no profile.
+-- APlayerState::PlayerNamePrivate is engine-standard, and UE4SS FindAllOf matches
+-- subclasses, so FindAllOf("PlayerState") enumerates every game's players. Used by
+-- main.lua whenever the profile doesn't define its own players().
+function M.players()
+    local out = {}
+    local ok, list = pcall(function() return FindAllOf("PlayerState") end)
+    if not ok or not list then return out end
+    for _, ps in ipairs(list) do
+        if ps and ps:IsValid() then
+            local n
+            local o1 = pcall(function() n = ps.PlayerNamePrivate:ToString() end)
+            if (not o1 or not n or n == "") then
+                pcall(function() n = ps:GetPlayerName():ToString() end)
+            end
+            if n and n ~= "" then
+                -- try a stable unique net id for gameId/steamId; fall back to the name
+                local uid
+                pcall(function() uid = ps.UniqueId:ToString() end)
+                out[#out + 1] = { gameId = uid or n, name = n, steamId = (uid and uid:match("(%d%d%d%d%d+)")) }
+            end
+        end
+    end
+    return out
+end
+
 return M
