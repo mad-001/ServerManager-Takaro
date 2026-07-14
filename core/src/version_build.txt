@@ -1,0 +1,26 @@
+version.cpp:58:14: error: conflicting declaration of C function ‘BOOL VerFindFileA(DWORD, LPCSTR, LPCSTR, LPCSTR, LPSTR, PUINT, LPSTR, PUINT)’
+   58 | BOOL  WINAPI VerFindFileA(DWORD u, LPCSTR fn2, LPCSTR wd, LPCSTR ad, LPSTR cd, PUINT cl, LPSTR dd, PUINT dl) { auto fn=(BOOL(WINAPI*)(DWORD,LPCSTR,LPCSTR,LPCSTR,LPSTR,PUINT,LPSTR,PUINT))RealFunc("VerFindFileA"); return fn?fn(u,fn2,wd,ad,cd,cl,dd,dl):FALSE; }
+      |              ^~~~~~~~~~~~
+In file included from /usr/share/mingw-w64/include/windows.h:75,
+                 from version.cpp:7:
+/usr/share/mingw-w64/include/winver.h:145:16: note: previous declaration ‘DWORD VerFindFileA(DWORD, LPSTR, LPSTR, LPSTR, LPSTR, PUINT, LPSTR, PUINT)’
+  145 |   DWORD WINAPI VerFindFileA(DWORD uFlags,LPSTR szFileName,LPSTR szWinDir,LPSTR szAppDir,LPSTR szCurDir,PUINT lpuCurDirLen,LPSTR szDestDir,PUINT lpuDestDirLen);
+      |                ^~~~~~~~~~~~
+version.cpp:59:14: error: conflicting declaration of C function ‘BOOL VerFindFileW(DWORD, LPCWSTR, LPCWSTR, LPCWSTR, LPWSTR, PUINT, LPWSTR, PUINT)’
+   59 | BOOL  WINAPI VerFindFileW(DWORD u, LPCWSTR fn2, LPCWSTR wd, LPCWSTR ad, LPWSTR cd, PUINT cl, LPWSTR dd, PUINT dl){ auto fn=(BOOL(WINAPI*)(DWORD,LPCWSTR,LPCWSTR,LPCWSTR,LPWSTR,PUINT,LPWSTR,PUINT))RealFunc("VerFindFileW"); return fn?fn(u,fn2,wd,ad,cd,cl,dd,dl):FALSE; }
+      |              ^~~~~~~~~~~~
+/usr/share/mingw-w64/include/winver.h:146:16: note: previous declaration ‘DWORD VerFindFileW(DWORD, LPWSTR, LPWSTR, LPWSTR, LPWSTR, PUINT, LPWSTR, PUINT)’
+  146 |   DWORD WINAPI VerFindFileW(DWORD uFlags,LPWSTR szFileName,LPWSTR szWinDir,LPWSTR szAppDir,LPWSTR szCurDir,PUINT lpuCurDirLen,LPWSTR szDestDir,PUINT lpuDestDirLen);
+      |                ^~~~~~~~~~~~
+version.cpp:60:14: error: conflicting declaration of C function ‘DWORD VerInstallFileA(DWORD, LPCSTR, LPCSTR, LPCSTR, LPCSTR, LPCSTR, LPSTR, PUINT)’
+   60 | DWORD WINAPI VerInstallFileA(DWORD u, LPCSTR s, LPCSTR d, LPCSTR sd, LPCSTR dd, LPCSTR cd, LPSTR tf, PUINT tl) { auto fn=(DWORD(WINAPI*)(DWORD,LPCSTR,LPCSTR,LPCSTR,LPCSTR,LPCSTR,LPSTR,PUINT))RealFunc("VerInstallFileA"); return fn?fn(u,s,d,sd,dd,cd,tf,tl):0; }
+      |              ^~~~~~~~~~~~~~~
+/usr/share/mingw-w64/include/winver.h:147:16: note: previous declaration ‘DWORD VerInstallFileA(DWORD, LPSTR, LPSTR, LPSTR, LPSTR, LPSTR, LPSTR, PUINT)’
+  147 |   DWORD WINAPI VerInstallFileA(DWORD uFlags,LPSTR szSrcFileName,LPSTR szDestFileName,LPSTR szSrcDir,LPSTR szDestDir,LPSTR szCurDir,LPSTR szTmpFile,PUINT lpuTmpFileLen);
+      |                ^~~~~~~~~~~~~~~
+version.cpp:61:14: error: conflicting declaration of C function ‘DWORD VerInstallFileW(DWORD, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPWSTR, PUINT)’
+   61 | DWORD WINAPI VerInstallFileW(DWORD u, LPCWSTR s, LPCWSTR d, LPCWSTR sd, LPCWSTR dd, LPCWSTR cd, LPWSTR tf, PUINT tl){ auto fn=(DWORD(WINAPI*)(DWORD,LPCWSTR,LPCWSTR,LPCWSTR,LPCWSTR,LPCWSTR,LPWSTR,PUINT))RealFunc("VerInstallFileW"); return fn?fn(u,s,d,sd,dd,cd,tf,tl):0; }
+      |              ^~~~~~~~~~~~~~~
+/usr/share/mingw-w64/include/winver.h:148:16: note: previous declaration ‘DWORD VerInstallFileW(DWORD, LPWSTR, LPWSTR, LPWSTR, LPWSTR, LPWSTR, LPWSTR, PUINT)’
+  148 |   DWORD WINAPI VerInstallFileW(DWORD uFlags,LPWSTR szSrcFileName,LPWSTR szDestFileName,LPWSTR szSrcDir,LPWSTR szDestDir,LPWSTR szCurDir,LPWSTR szTmpFile,PUINT lpuTmpFileLen);
+      |                ^~~~~~~~~~~~~~~

@@ -426,6 +426,13 @@ void wsLoop() {
 }
 
 void coreBoot() {
+    // Single-instance guard: if the game imports more than one of our proxy DLLs
+    // (winmm / version / xinput), only the first to boot starts the core.
+    static bool s_booted = false;
+    CreateMutexA(NULL, FALSE, "Global\\ServerManagerTakaroCore");
+    if (GetLastError() == ERROR_ALREADY_EXISTS || s_booted) return;
+    s_booted = true;
+
     computePaths();
     loadConfig();
     if (!ENABLED) { logmsg("TakaroConnector disabled (ENABLED=false)"); return; }

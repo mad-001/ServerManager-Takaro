@@ -54,3 +54,10 @@ POLL_INTERVAL_MS=1000            # how often the core drains events / reads rost
 REQ_TIMEOUT_MS=6000              # how long an action waits for the Lua result
 SERVER_STARTED_MSG=Server started
 ```
+
+## Proxy variants
+
+The game must import the proxy DLL you ship. Most UE games import `winmm.dll` or
+`dwmapi.dll` (UE4SS ships the latter); some import `version.dll`. Ship the matching one
+(or several — the core has a single-instance guard). `build.sh` builds `winmm.dll` and
+`version.dll`; use UE4SS's `dwmapi.dll` as-is.
