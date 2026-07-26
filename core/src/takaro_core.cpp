@@ -47,6 +47,22 @@ int   REQ_TIMEOUT_MS   = 6000;   // how long a Takaro action waits for the Lua r
 bool  ENABLED          = true;
 std::string SERVER_STARTED_MSG = "Server started";
 
+// Takaro websocket host. Hardcoded on purpose -- deliberately NOT readable from
+// TakaroConfig.txt, so a shipped build can never be pointed somewhere else by an
+// end user. Internal test builds override it at compile time:
+//     -DTAKARO_WS_HOST=L"connect.k8s.takaro.dev"
+#ifndef TAKARO_WS_HOST
+#define TAKARO_WS_HOST L"connect.takaro.io"
+#endif
+// Port and TLS, same rationale as the host: overridable only at build time so a
+// shipped DLL can never be pointed at a plaintext local endpoint.
+#ifndef TAKARO_WS_PORT
+#define TAKARO_WS_PORT 443
+#endif
+#ifndef TAKARO_WS_SECURE
+#define TAKARO_WS_SECURE 1
+#endif
+
 std::string g_gameDir, g_modDir, g_ipcDir, g_configPath, g_logPath;
 std::string g_evtDir, g_reqDir, g_resDir, g_playersPath;
 
@@ -366,11 +382,12 @@ bool wsRunOnce() {
     g_wsSession = WinHttpOpen(L"ServerManagerTakaro", WINHTTP_ACCESS_TYPE_NO_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!g_wsSession) return false;
-    g_wsConn = WinHttpConnect(g_wsSession, L"connect.takaro.io", 443, 0);
+    g_wsConn = WinHttpConnect(g_wsSession, TAKARO_WS_HOST, TAKARO_WS_PORT, 0);
     if (!g_wsConn) { WinHttpCloseHandle(g_wsSession); g_wsSession = NULL; return false; }
 
     HINTERNET req = WinHttpOpenRequest(g_wsConn, L"GET", L"/", NULL, WINHTTP_NO_REFERER,
-                                       WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+                                       WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                       TAKARO_WS_SECURE ? WINHTTP_FLAG_SECURE : 0);
     bool ok = req &&
         WinHttpSetOption(req, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0) &&
         WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0) &&
