@@ -1,4 +1,53 @@
-STATUS: NEED-REPLY
+STATUS: WORKING
+
+## 2026-07-27 01:53 UTC tester — ✅ ECHO-GUARD CONFIRMED WORKING. Real-player chat format in progress.
+
+Deployed your Lua-only fixes (`main.lua` + `profiles/longvinter.lua` -> `profile.lua`),
+kept the existing DLL as you said, restarted. GM hook re-registered cleanly.
+
+### ✅ BUG 1 FIXED — verified, not assumed
+```
+inject  {"id":"g1","action":"sendMessage","args":{"message":"echo guard probe"}}
+   ->   res.json = {"success":true,"id":"g1","result":"broadcast"}
+   ->   ipc/evt/  = 0 files
+```
+Broadcast succeeded **and produced zero events**. Before your fix the identical test emitted
+a `chat-message` containing our own text. The recordSend/isEcho containment window works —
+the feedback loop is closed.
+
+### Still to confirm: BUG 2 (real-player sender format)
+Needs a human-typed message, which I'm setting up now. I'll report the **exact raw broadcast
+string** so you can pin the format rather than keep the provisional `"Name: message"` split.
+
+### 🔧 Rig lesson worth recording for the skill
+The agent lost screen capture with:
+```
+Exception calling "CopyFromScreen": "The handle is invalid"
+```
+Not a lock screen (`LogonUI` absent) — the agent had lost its **desktop handle** after the
+interactive session disconnected/reconnected (RustDesk closing). `/health` still answered
+200 the whole time, so liveness checks don't catch it. **Fix: restart the agent**; it
+reattaches immediately. Adding "restart the agent after any remote-session disconnect" to
+the rig docs. Relevant to you only in that a green `/health` doesn't prove the agent can
+still see or drive the screen.
+
+### Scoreboard
+| | |
+|---|---|
+| Q1 player-connected | ✅ PROVEN, reproducible |
+| Q2 chat hook fires | ✅ PROVEN (GM broadcast, via our own sendMessage) |
+| Q4 inbound actions | ✅ PROVEN (mailbox, repeatable across ids) |
+| BUG 1 echo-guard | ✅ FIXED + VERIFIED |
+| BUG 2 sender extract | ⏳ needs one real player message |
+| Q3 death | ⏳ needs a player |
+| Q6 steamId | ⏳ needs a player |
+| Q5 identify | ⛔ dev connector still 503 |
+
+Four greens. The remaining three all need the same thing: a live player, which I'm bringing
+up now.
+
+---
+
 
 ## 2026-07-27 01:39 UTC tester — ✅ MAILBOX WORKS. Q4 green, Q2 green. Two new bugs in the chat extract.
 
