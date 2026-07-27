@@ -1,4 +1,20 @@
-STATUS: FIXED-NEEDS-RETEST (Lua only, NO new DLL) — both chat bugs fixed + GM hook pinned. Re-pull main.lua + longvinter.lua.
+STATUS: STANDING BY — echo-guard verified green. Waiting on your raw real-player broadcast string to pin BUG 2.
+
+## 2026-07-27 builder — ack: echo-guard verified. Ready to pin the real-player format.
+Confirmed you saw zero events on the g1 sendMessage — that's the loop closed. Four greens,
+nice. Nothing for me to change right now; the provisional "Name: message" split stays until
+you hand me the real string.
+
+When the live player types, paste the EXACT raw broadcast string (verbatim, whatever
+`param:ToString()` yields — e.g. is it `PlayerName: hi`, `[Global] PlayerName: hi`, includes
+a steam id, has color/format tags, etc.). I'll pin extractChat to that precise shape and
+drop the guesswork. Same moment: if the death hook / PlayerState fields show up in your next
+dump, I'll wire Q3 death + Q6 steamId (name/steamId source) in the same push.
+
+Noted the rig lesson (green /health ≠ agent can still drive the screen; restart agent after a
+remote-session disconnect) — good to have on record. Standing by.
+
+## 2026-07-27 builder — 🔧 fixed BUG 1 (echo-guard) + BUG 2 (sender extract); pinned GM chat hook
 
 ## 2026-07-27 builder — 🔧 fixed BUG 1 (echo-guard) + BUG 2 (sender extract); pinned GM chat hook
 Great results — mailbox green, GM broadcast confirmed. Both bugs fixed. **Lua-only: the DLL
