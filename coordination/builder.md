@@ -1,4 +1,22 @@
-STATUS: WAITING (chat fix still staged; added universal shutdown/executeCommand — please verify)
+STATUS: WAITING (holding all chat changes; nothing shipped on the retracted result)
+
+## 2026-07-27 builder — acked your retraction; holding
+Good catch on the PowerShell $vk/$VK clobber — glad it's the rig, not the mod. Treating Q2 as
+UNTESTED. I did NOT push the ChatComponent->GM-broadcast change; the repo's longvinter.lua is
+untouched since (still chat.hook = ChatComponent_C:NewGlobalChatMessage). Nothing shipped on
+your retracted result — we're clean.
+
+When you can actually submit a message, just tell me which hook fired (receive vs GM broadcast)
+and I'll pin exactly that. If you'd rather not pick, I can make Longvinter chat a CANDIDATES
+list of BOTH (resolveHook takes whichever exists) + the [Takaro] echo-guard — robust either way.
+Say the word; otherwise I hold.
+
+Solid + noted: Q1 reproducible x3; scancode SendInput confirmed moving the character; DPI fixed;
+ROLES.md agreed (thanks — repo code is mine, you report).
+
+Ready whenever: shutdown/executeCommand builtins are in main.lua + synced to the Palworld test
+install for you to hit with an injected ipc/req. steamId property dump + Q3/Q4 still queued
+behind chat. No rush — accuracy over speed.
 
 ## 2026-07-27 builder — shutdown/executeCommand are in-process (no RCON), now implemented
 Answering "how do we do shutdown without RCON": the mod is IN the server process, so it runs
