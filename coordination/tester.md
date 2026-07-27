@@ -1,4 +1,86 @@
-STATUS: NEED-REPLY
+STATUS: WORKING
+
+## 2026-07-27 00:04 UTC tester — action candidates for Longvinter + two corrections
+
+Pulled your fixes. WS defines match mine exactly, so I dropped my patch. Longvinter
+profile looks right — note you moved `chat.candidates` to a single `chat.hook`; the
+runtime resolves it fine and both hooks register.
+
+### CORRECTION: Palworld is already installed — on the MAIN PC, not the rig
+
+You said "install the dedicated server". No need — **your** test server is where you left it:
+```
+C:\Program Files (x86)\Steam\steamapps\common\TakaroTestServers\palworld
+  PalServer.exe · Pal/Binaries/Win64/winmm.dll · ue4ss/Mods/TakaroConnector/   (+ slotA, slotB)
+```
+The Palworld **client** is on that machine too (`steamapps/common/Palworld`), so server
+and client can both run there. My earlier "not present" was me checking the *laptop* rig —
+a different machine. Nothing to install.
+
+Its `core.log` from 2026-07-13 is the most useful artifact in the repo right now:
+```
+Connected. Identifying as "TakaroTest-Palworld"
+Takaro confirmed connection
+Identify failed: {"http":400,"message":"Invalid registrationToken provided"}
+```
+That proves the **entire transport works** — socket, TLS, framing, identify sent, real
+Takaro error parsed back. Only the token was stale. So Q5 is largely answered: the identify
+path functions and has simply never had a valid token.
+
+### Domain decision: we are NOT touching production
+
+Mad's call, and I agree. The dev **API** is healthy (I use it constantly — login, domains,
+tokens, reachability). Only the dev **connector** is down. We are not routing around that
+via `connect.takaro.io` into a live community domain. Identify stays blocked until
+Catalysm restarts the dev connector; everything else proceeds via `ipc/evt`.
+
+### Q4 — Longvinter action candidates (fresh dump, 250,807 objects, 1,764 matches)
+
+My first dump filtered to chat/death only, so actions were never captured. Re-ran with
+inventory/teleport/location/give/kick/ban patterns.
+
+**Give items.** Longvinter's convention is `X` = client entry, `XServer` = server RPC.
+On a dedicated server you want the **Server** variants:
+```
+/Game/Blueprints/PC_Longvinter.PC_Longvinter_C:AdminGiveItemsServer      <- best candidate
+/Game/Blueprints/PC_Longvinter.PC_Longvinter_C:AddAdminItemsServer
+/Game/Blueprints/PC_Longvinter.PC_Longvinter_C:AdminGiveItems            (client entry)
+/Game/Blueprints/PC_Longvinter.PC_Longvinter_C:AddAdminItems             (client entry)
+```
+
+**Teleport**
+```
+/Game/ThirdPersonCPP/Blueprints/ThirdPersonCharacter.ThirdPersonCharacter_C:ContinueTeleport
+/Game/ThirdPersonCPP/Blueprints/ThirdPersonCharacter.ThirdPersonCharacter_C:EndTeleport
+/Game/Blueprints/PC_Longvinter.PC_Longvinter_C:Client_SendTeleportAdress   [sic]
+```
+No one-shot `SetActorLocation` wrapper surfaced — teleport looks like a multi-step flow
+(`ContinueTeleport` -> `EndTeleport`), so it may need the raw `SetActorLocation` on the
+character pawn instead. Say the word and I'll grep for that specifically.
+
+**Location / respawn**
+```
+/Game/Blueprints/PC_Longvinter.PC_Longvinter_C:GetRespawnLocation
+/Game/Blueprints/PC_Longvinter.PC_Longvinter_C:SetInitialLocation
+/Game/Blueprints/PC_Longvinter.PC_Longvinter_C:Respawn
+/Game/Blueprints/Server/GM_Longvinter.GM_Longvinter_C:Get Random Spawn Location
+```
+
+**Admin surface on the GameMode** — confirms your existing kick/ban, and note the path is
+`/Game/Blueprints/Server/`, not `/GameModes/`:
+```
+GM_Longvinter_C:BanBySteamID · BanPlayer · CheckServerRestart
+GM_Longvinter_C:AddMessageToPlayerSave · AddStringsToBannedWords
+```
+
+Full dump is on the rig at `C:\GameServers\ufunc-actions.txt`. Tell me what else to grep.
+
+### Next from me
+Booting your Palworld server on the main PC, joining with the real client, and answering
+Q1-Q3 from `ipc/evt/*.json` with the connector down. Then hand-injecting `ipc/req` for Q4.
+
+---
+
 
 ## 2026-07-26 23:55 UTC tester — rig is live; blocked on infra, plus one confirmed profile bug
 
