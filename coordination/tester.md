@@ -1,4 +1,86 @@
-STATUS: WORKING
+STATUS: NEED-REPLY
+
+## 2026-07-27 03:01 UTC tester — 3 more actions PASS. teleportPlayer reports success but DOES NOT MOVE the player.
+
+Live player `Mad` connected throughout. All via injected mailbox.
+
+### ✅ executeCommand — works
+```json
+{"id":"d1","action":"executeCommand","args":{"command":"Suicide"}}
+-> {"success":true,"result":{"rawResult":"ran: Suicide","success":true}}
+```
+Console path functions. (Longvinter doesn't implement `Suicide`, so the player didn't die —
+the command ran, the game just ignored it. Fine; that's a game thing, not a mod thing.)
+
+### ✅ getPlayerLocation — works, real coordinates
+```json
+{"x":-14474.552657786,"y":25813.242680332,"z":3947.2213053875,"dimension":"0"}
+```
+Also proves `findChar()` correctly resolves a live player via
+`PlayerState.PlayerNamePrivate`, and `K2_GetActorLocation` works.
+
+### 🐛 BUG 3 — teleportPlayer returns success but the player does not move
+```json
+request  {"id":"tp1","action":"teleportPlayer","args":{"gameId":"Mad","x":-14474,"y":25813,"z":4600}}
+response {"success":true,"result":"teleported (ServerAdminTeleport)"}
+
+location BEFORE  x:-14474.552657786  y:25813.242680332  z:3947.2213053875
+location AFTER   x:-14474.552657786  y:25813.242680332  z:3947.2213053875   <-- unchanged
+```
+I asked for z 3947 -> 4600 (a clear 650-unit lift). Position is **byte-identical** afterwards.
+
+**Why the false positive:** `pcall(function() c:ServerAdminTeleport(v) end)` *succeeds* —
+Lua called the UFunction without erroring — so `ok` is true and the `K2_SetActorLocation`
+fallback never runs. But the function didn't move anything. Most likely `ServerAdminTeleport`
+takes a different signature than a single vector (my dump can't show param types), or it
+needs extra state.
+
+This is exactly the "HTTP 200 means accepted, not that it happened" trap from the field
+manual, and my `ServerAdminTeleport` recommendation caused it — apologies, that one's on me.
+
+**Suggested fix:** don't trust `pcall`. Read the location back and compare:
+```lua
+local before = c:K2_GetActorLocation()
+pcall(function() c:ServerAdminTeleport(v) end)
+local after = c:K2_GetActorLocation()
+if moved(before, after) then return true, "teleported (ServerAdminTeleport)" end
+pcall(function() c:K2_SetActorLocation(v, false, {}, true) end)
+after = c:K2_GetActorLocation()
+if moved(before, after) then return true, "teleported (K2 fallback)" end
+return false, "teleport had no effect"
+```
+That turns a silent false positive into either a working teleport or an honest failure. Worth
+applying the same read-back pattern to any action with an observable result — giveItem
+especially, since "pcall succeeded" clearly doesn't mean "it happened".
+
+I can't test the K2 fallback in isolation without editing the profile (yours). Push a build
+with the read-back and I'll retest immediately — player is still connected.
+
+### ℹ️ getPlayers not implemented in the Longvinter profile
+```json
+{"error":"Action not implemented in profile: getPlayers","success":false}
+```
+Probably intentional (the roster covers it via players.json) — just confirming you know, in
+case Takaro calls it directly.
+
+### Scoreboard
+| | |
+|---|---|
+| Q1 player-connected | ✅ PROVEN x4 |
+| Q2 chat hook fires | ✅ PROVEN |
+| Q4 sendMessage | ✅ PROVEN |
+| Q4 executeCommand | ✅ PROVEN |
+| Q4 getPlayerLocation | ✅ PROVEN |
+| Q4 teleportPlayer | 🐛 false positive — BUG 3 |
+| Q4 giveItem | ⏳ next, will verify by read-back not pcall |
+| BUG 1 echo-guard | ✅ FIXED + VERIFIED |
+| BUG 2 sender format | ⏳ Mad hasn't sent the manual message yet |
+| Q3 death | ⏳ no console kill in Longvinter; need another trigger |
+| Q6 steamId | ⏳ next |
+| Q5 identify | ⛔ dev connector still 503 |
+
+---
+
 
 ## 2026-07-27 02:53 UTC tester — Q1 reproduced (4th time). Chat SUBMIT is a hard rig limit; asking Mad to type one message.
 
