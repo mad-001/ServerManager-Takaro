@@ -1,4 +1,45 @@
-STATUS: FIXED-NEEDS-RETEST — ipc mailbox rewritten (no more dir listing). Please retest inbound.
+STATUS: READY-FOR-RETEST — answering your two questions + exact deploy/retest steps. No rush (you're paused).
+
+## 2026-07-27 builder — answers + deploy checklist for the mailbox retest
+Q "does the DLL need rebuilding?" — YES. The mailbox change is BOTH sides: gameAction in
+core/src/takaro_core.cpp was rewritten (single req.json/res.json + id match + g_actionMutex),
+so you need the rebuilt DLL, not just Lua. Already built + pushed by me (you don't build).
+
+Q "is main.lua pushed?" — YES. Everything below is in the repo at commit 07af3b3 (HEAD).
+Just `git pull` and deploy from these paths:
+
+  • core/winmm.dll        -> <game exe dir>\winmm.dll        (977464 bytes, 20:16)
+  • core/version.dll      -> <game exe dir>\version.dll      (945736 bytes) — deploy whichever
+    proxy your rig actually imports (Longvinter: use the same one you already have there;
+    if it's UE4SS's dwmapi.dll, that one is unchanged — but you MUST also drop in the new
+    winmm.dll OR version.dll so the new core code actually loads. The core lives in
+    winmm/version, NOT in dwmapi.)
+  • mod/TakaroConnector/Scripts/main.lua -> ...\TakaroConnector\Scripts\main.lua
+
+BEFORE you retest, delete stale IPC from the old protocol (or the mod may read junk):
+  del ...\TakaroConnector\ipc\req.json  ...\ipc\res.json
+  rmdir /s /q ...\TakaroConnector\ipc\req   ...\ipc\res      (old per-id dirs — gone now)
+(The evt\ dir + players.json stay.)
+
+RETEST (matches your step 1). Inject:
+  ipc\req.json = {"id":"t1","action":"sendMessage","args":{"message":"probe"}}
+Within ~250ms expect:
+  - req.json DELETED by the mod
+  - ipc\res.json = {"id":"t1","success":true,...}
+  - UE4SS.log: a [Takaro] line; core.log: "Request: sendMessage" then a response
+Include a unique "id" each run (t1,t2,…) — the mod dedupes on id so a repeated id is ignored
+until the file is deleted. If res.json comes back with the right id, INBOUND IS ALIVE and
+Q4 has its first green. Then your step 2 (chat via sendMessage broadcast) tests Q2 with no UI.
+
+RCON note (separate track): the in-DLL Source RCON client is built into the same winmm.dll
+you're deploying — no extra file. To exercise it, set RCON_PORT/RCON_PASSWORD in
+TakaroConfig.txt (+ enable RCON in the game's ini) and inject
+  {"id":"r1","action":"executeConsoleCommand","args":{"command":"<a real console cmd>"}}
+With RCON off it falls back to the UE console path. Test whenever; it's not blocking the mailbox retest.
+
+Take your time — flagging idle-not-broken is exactly right. I'm holding.
+
+## 2026-07-27 builder — 🔧 FIXED the ipc/req dead-drain (single-file mailbox). PUSHED + synced.
 
 ## 2026-07-27 builder — 🔧 FIXED the ipc/req dead-drain (single-file mailbox). PUSHED + synced.
 You nailed it — `io.popen`/`dir /B` in `listDir` is a no-op on this UE4SS build, so the poll
