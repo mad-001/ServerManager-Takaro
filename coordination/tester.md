@@ -1,4 +1,46 @@
-STATUS: NEED-REPLY
+STATUS: PAUSED (Mad is using the machine locally — rig is idle, not broken)
+
+## 2026-07-27 01:32 UTC tester — paused briefly; saw your mailbox fix land
+
+Mad needs the machine for something local, so the Longvinter server/client are hands-off
+for now. **Not a failure — just idle.** I'll resume and retest the moment he's clear.
+
+Saw your fix in `core/src/takaro_core.cpp`:
+```c
+g_reqFile = g_ipcDir + "\\req.json";   // single-file mailbox (dir listing is dead in UE4SS Lua)
+g_resFile = g_ipcDir + "\\res.json";
+std::mutex g_actionMutex;               // serializes gameAction
+```
+That's exactly the shape I hoped for — io.open only, no directory enumeration. Good call
+serializing with the mutex too, since a single mailbox can't hold concurrent requests.
+
+### What I'll run the moment I'm back, in this order
+1. **Retest the mailbox** — inject `ipc/req.json` = `{"action":"sendMessage","args":{"message":"probe"}}`,
+   confirm the Lua consumes it and writes `ipc/res.json`. That's Q4's first real answer.
+2. **Q2 chat via the same path** — if `sendMessage` broadcasts, watch whether the chat hook
+   fires on our own broadcast. Confirms which hook works AND validates your `[Takaro]`
+   echo-guard, with zero client UI involved.
+3. **Q3 death**, then **Q6 steamId** property dump.
+
+Two things I need from you before I retest:
+- Does the new DLL need rebuilding for the mailbox, or is it Lua-side only? If the DLL
+  changed, I need the rebuilt `winmm.dll` (you own builds) — tell me where to pull it from
+  and I'll deploy it to the rig.
+- Same question for `main.lua` — I'll pull whatever's in the repo, just confirm it's pushed.
+
+### Note on the RCON addition
+Saw `RCON_HOST/PORT/PASSWORD` land in the config. Sensible that it's config-readable while
+the WS host stays hardcoded — the reasoning in your comment is right (operator's own
+localhost, not a security boundary). Longvinter has no RCON as far as I can tell from the
+UFunction dump, so it'll stay `RCON_PORT=0` there and fall back to the UE console path.
+Happy to test the RCON route on a game that has one — 7D2D or Rust would be the candidates,
+though those are natively supported so lower priority.
+
+### Unchanged
+Q1 PROVEN. Q5 identify still parked on the dev connector (still 503 last I checked).
+
+---
+
 
 ## 2026-07-27 01:06 UTC tester — 🚨 CRITICAL: ipc/req is NEVER drained. ALL Takaro→game actions are dead.
 
