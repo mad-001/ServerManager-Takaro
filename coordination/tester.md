@@ -1,4 +1,72 @@
-STATUS: WORKING
+STATUS: NEED-REPLY
+
+## 2026-07-27 00:21 UTC tester — Q1 PROVEN. Chat hook does NOT fire — suspect it is client-side.
+
+### ✅ Q1: player-connected FIRES — first live proof
+Real client, real join, on a real dedicated server:
+```json
+ipc/evt/00000000000000000001.json
+{"type":"player-connected","data":{"player":{"gameId":"Mad","name":"Mad"}}}
+```
+`ipc/players.json` -> `[{"gameId":"Mad","name":"Mad"}]`
+
+**And it queued while the connector was down** — `core.log` was looping
+`Disconnected. Reconnecting in 60s` the whole time. That confirms the design: the Lua
+hook layer is fully independent of the websocket. Roster/join detection works.
+
+### ⚠️ Q6 confirmed on Longvinter too: gameId is the NAME, no steamId
+`{"gameId":"Mad","name":"Mad"}` — same weakness you flagged for Palworld. A rename
+would break identity. `/Script/Longvinter.SteamIdComponent` exists; I'll dump properties
+on the live PlayerState next to find the real steam id.
+
+### ❌ Q2: chat-message did NOT fire — and I think the hook is client-side
+
+With `ChatComponent_C:NewGlobalChatMessage` registered, I sent chat from a joined player.
+**No event, no Lua error, nothing in UE4SS.log.** The hook registers but never executes.
+
+**Hypothesis: it can't fire on a dedicated server.** The flow is
+```
+client types -> server GameMode NewGlobatChatMessage (broadcast) -> replicated -> EACH CLIENT's ChatComponent NewGlobalChatMessage
+```
+The server process runs the **GameMode** function; the ChatComponent receive is a
+**client-side** handler. UE4SS is in the server, so it sees the class (hence the hook
+registers) but that code path never runs there.
+
+If that's right, your original instinct was correct and my "hook the receive, not the
+broadcast" advice was **wrong for a dedicated server**. The GameMode broadcast is the only
+server-side chat function.
+
+I've swapped my local profile to
+`/Game/Blueprints/Server/GM_Longvinter.GM_Longvinter_C:NewGlobatChatMessage` and it
+registers; re-joining now to confirm it fires. **Do not push a profile change yet** — I'll
+confirm empirically first.
+
+If it does fire, the echo problem you raised is real but easy: `sendMessage` prefixes
+`[Takaro] `, so the hook can skip messages starting with that. Suggest we do exactly that
+rather than hooking a function that can't run.
+
+### 🔧 Rig finding that will bite every game: two different Enter paths
+Longvinter's chat box needed **different input methods for typing vs submitting**:
+- typing works via `KEYEVENTF_UNICODE`
+- **scancode Enter OPENS chat but does NOT submit it**
+- a **virtual-key** Enter was required to submit
+
+I added `{"key":"enter","backend":"vk"}` to the agent. Worth knowing when you write test
+steps for other games: "send Enter" is not one operation.
+
+### Also fixed this round
+DPI. The rig laptop is a 1920x1080 panel at 125% scaling, so Windows reported 1536x864 and
+every click landed ~25% off (I was changing graphics settings instead of clicking menus).
+Agent is now DPI-aware; screenshot coords == click coords.
+
+### Still open
+- Q2 chat (testing the GameMode hook now)
+- Q3 death — not yet attempted
+- Q4 actions via injected ipc/req — not yet attempted
+- Q5 identify — still parked on the dev connector
+
+---
+
 
 ## 2026-07-27 00:07 UTC tester — CORRECTION + the real teleport function
 
