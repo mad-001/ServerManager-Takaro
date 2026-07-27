@@ -15,15 +15,21 @@ local json = require("json")
 
 local TC = {
     MOD_DIR   = "ue4ss/Mods/TakaroConnector",
-    POLL_MS   = 250,     -- how often we poll ipc/req for actions
+    POLL_MS   = 250,     -- how often we poll ipc/req.json for the next action
     ROSTER_MS = 3000,    -- how often we rebuild the roster + diff join/leave
     seq       = 0,
     known     = {},      -- gameId -> playerInfo  (for join/leave + death-count diffs)
+    lastReqId = nil,     -- id of the last request we accepted (dedupe until it's deleted)
 }
 TC.IPC   = TC.MOD_DIR .. "/ipc"
 TC.EVT   = TC.IPC .. "/evt"
-TC.REQ   = TC.IPC .. "/req"
-TC.RES   = TC.IPC .. "/res"
+-- Single-file request mailbox. The old multi-file protocol (ipc/req/<id>.json listed with
+-- `dir /B` via io.popen) is DEAD on real UE4SS builds: io.popen is a no-op there, so the
+-- directory always listed empty and NO inbound action ever ran. We use one known-path file
+-- read with io.open (the only fs path proven to work): the DLL writes ipc/req.json (one
+-- request; it never has more than one in flight), we answer ipc/res.json.
+TC.REQ_FILE = TC.IPC .. "/req.json"
+TC.RES_FILE = TC.IPC .. "/res.json"
 TC.PLAYERS = TC.IPC .. "/players.json"
 
 local function log(m) print("[Takaro] " .. tostring(m)) end
@@ -227,20 +233,26 @@ local function dispatch(action, args)
     return { success = true, result = (a ~= nil and a or {}) }
 end
 
-local function processReq(filename)
-    local reqPath = TC.REQ .. "/" .. filename
-    local raw = readFile(reqPath)
+-- Read the single request mailbox (io.open only — no directory listing). The DLL writes
+-- ipc/req.json = {id, action, args} and blocks until ipc/res.json (matching id) appears,
+-- so there's never more than one request pending. We dedupe on id so we don't reprocess
+-- the same file across poll ticks before the game thread deletes it.
+local function processReqFile()
+    local raw = readFile(TC.REQ_FILE)
     if not raw then return end
     local msg = json.decode(raw)
-    if not msg or not msg.action then deleteFile(reqPath); return end
-    local id = filename:gsub("%.json$", "")
+    if not msg or not msg.action then deleteFile(TC.REQ_FILE); return end
+    local id = tostring(msg.id or "0")
+    if id == TC.lastReqId then return end        -- already accepted; awaiting game-thread delete
+    TC.lastReqId = id
     -- game mutations must run on the game thread
     ExecuteInGameThread(function()
-        local res
         local ok, out = pcall(dispatch, msg.action, msg.args)
-        res = ok and out or { success = false, error = tostring(out) }
-        writeAtomic(TC.RES .. "/" .. id .. ".json", json.encode(res))
-        deleteFile(reqPath)
+        local res = ok and out or { success = false, error = tostring(out) }
+        if type(res) ~= "table" then res = { success = true, result = res } end
+        res.id = id                              -- DLL accepts only the matching id
+        writeAtomic(TC.RES_FILE, json.encode(res))
+        deleteFile(TC.REQ_FILE)
     end)
 end
 
@@ -250,10 +262,9 @@ print(" ServerManager-Takaro connector loaded")
 print("  profile: " .. (profile.name or "(none / auto-detect)"))
 print("=======================================")
 
-ensureDir(TC.EVT); ensureDir(TC.REQ); ensureDir(TC.RES)
--- clear any stale req/res from a previous run (evt is drained by the DLL)
-for _, f in ipairs(listDir(TC.REQ)) do deleteFile(TC.REQ .. "/" .. f) end
-for _, f in ipairs(listDir(TC.RES)) do deleteFile(TC.RES .. "/" .. f) end
+ensureDir(TC.EVT)
+-- clear any stale mailbox from a previous run (known paths; no directory listing)
+deleteFile(TC.REQ_FILE); deleteFile(TC.RES_FILE)
 
 -- install hooks once the game world is up (native /Script UFunctions are ready at
 -- startup; some RPCs load later, so defer a little and let auto-detect retry).
@@ -263,13 +274,9 @@ ExecuteWithDelay(4000, function()
     if type(profile.init) == "function" then pcall(profile.init, TC) end
 end)
 
--- action poll loop
+-- action poll loop (single mailbox; io.open only)
 LoopAsync(TC.POLL_MS, function()
-    local ok, err = pcall(function()
-        for _, name in ipairs(listDir(TC.REQ)) do
-            if name:match("%.json$") then processReq(name) end
-        end
-    end)
+    local ok, err = pcall(processReqFile)
     if not ok then log("req poll error: " .. tostring(err)) end
     return false
 end)

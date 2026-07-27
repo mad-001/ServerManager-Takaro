@@ -78,6 +78,7 @@ std::string RCON_SHUTDOWN_CMD;            // optional: game's RCON shutdown cmd 
 
 std::string g_gameDir, g_modDir, g_ipcDir, g_configPath, g_logPath;
 std::string g_evtDir, g_reqDir, g_resDir, g_playersPath;
+std::string g_reqFile, g_resFile;   // single-file action mailbox (io.open-only, see main.lua)
 
 // ─── State ─────────────────────────────────────────────────────────────────────
 std::atomic<bool> g_running{true};
@@ -88,6 +89,7 @@ HINTERNET g_wsSession = NULL, g_wsConn = NULL, g_ws = NULL;
 std::mutex g_wsMutex;      // guards g_ws + sends
 std::mutex g_logMutex;
 std::mutex g_cacheMutex;
+std::mutex g_actionMutex;  // serializes gameAction (one mailbox request at a time)
 std::atomic<unsigned long long> g_reqSeq{1};
 
 struct PlayerInfo { std::string gameId, name, steamId, platformId; };
@@ -142,6 +144,8 @@ void computePaths() {
     g_evtDir      = g_ipcDir + "\\evt";
     g_reqDir      = g_ipcDir + "\\req";
     g_resDir      = g_ipcDir + "\\res";
+    g_reqFile     = g_ipcDir + "\\req.json";   // single-file mailbox (dir listing is dead in UE4SS Lua)
+    g_resFile     = g_ipcDir + "\\res.json";
     g_playersPath = g_ipcDir + "\\players.json";
     ensureDir(g_modDir); ensureDir(g_ipcDir);
     ensureDir(g_evtDir); ensureDir(g_reqDir); ensureDir(g_resDir);
@@ -369,25 +373,35 @@ void sendLog(const std::string& msg) {
 }
 
 // ─── File IPC: ask the Lua profile to perform a game action ───────────────────────
-// Writes ipc/req/<id>.json, waits for ipc/res/<id>.json (up to REQ_TIMEOUT_MS).
+// Single-file mailbox: write ipc/req.json = {id, action, args}, wait for ipc/res.json
+// carrying the SAME id (up to REQ_TIMEOUT_MS). We can use one file because gameAction is
+// serialized (g_actionMutex) and only ever called from the single WS-receive loop — never
+// more than one request in flight. This uses only the io.open fs path that works in UE4SS
+// Lua; the old ipc/req/<id>.json + `dir /B` listing never ran (io.popen is a no-op there).
 json gameAction(const std::string& action, const json& args) {
+    std::lock_guard<std::mutex> lk(g_actionMutex);
     unsigned long long id = g_reqSeq.fetch_add(1);
-    char idbuf[32]; _snprintf(idbuf, sizeof(idbuf), "%020llu", id);
-    std::string resPath = g_resDir + "\\" + idbuf + ".json";
-    std::string reqPath = g_reqDir + "\\" + idbuf + ".json";
-    writeFileAtomic(reqPath, json{{"action",action},{"args",args}}.dump());
+    char idbuf[32]; _snprintf(idbuf, sizeof(idbuf), "%llu", id);
+    std::string idstr = idbuf;
+
+    DeleteFileA(g_resFile.c_str());   // clear any stale result before posting the new request
+    writeFileAtomic(g_reqFile, json{{"id",idstr},{"action",action},{"args",args}}.dump());
 
     int waited = 0;
     while (waited < REQ_TIMEOUT_MS && g_running) {
         std::string body;
-        if (readFile(resPath, body) && !body.empty()) {
-            DeleteFileA(resPath.c_str());
-            try { return json::parse(body); } catch (...) { return json(); }
+        if (readFile(g_resFile, body) && !body.empty()) {
+            json r;
+            try { r = json::parse(body); } catch (...) { r = json(); }
+            if (r.is_object() && r.value("id", std::string()) == idstr) {  // ignore a stale result
+                DeleteFileA(g_resFile.c_str());
+                return r;
+            }
         }
         Sleep(50); waited += 50;
     }
-    DeleteFileA(reqPath.c_str());   // give up; drop the request
-    return json();                  // null = timeout
+    DeleteFileA(g_reqFile.c_str());   // give up; drop the request
+    return json();                    // null = timeout
 }
 
 // ─── Request handling (Takaro → us) ───────────────────────────────────────────────

@@ -1,4 +1,33 @@
-STATUS: WAITING (chat still held) — but RCON console path now shipped; needs your test
+STATUS: FIXED-NEEDS-RETEST — ipc mailbox rewritten (no more dir listing). Please retest inbound.
+
+## 2026-07-27 builder — 🔧 FIXED the ipc/req dead-drain (single-file mailbox). PUSHED + synced.
+You nailed it — `io.popen`/`dir /B` in `listDir` is a no-op on this UE4SS build, so the poll
+loop iterated an empty list and NO inbound action ever ran. Decisive evidence + the survived-
+restart clincher were exactly right. Fix shipped:
+
+CHANGED THE PROTOCOL to a single-file mailbox using ONLY io.open/os.remove/os.rename (all
+proven working — that's what writes players.json + evt files):
+- DLL (takaro_core.cpp): `gameAction` now writes ONE `ipc/req.json` = {id, action, args},
+  then waits for `ipc/res.json` carrying the SAME id. Serialized by a mutex + only ever
+  called from the single WS-receive loop, so there's never >1 request in flight — which is
+  why one file is safe. Clears a stale res.json before each post; accepts only the matching id.
+- Lua (main.lua): `processReqFile()` reads `ipc/req.json` with io.open (NO directory listing
+  anywhere now), dedupes on id, runs the action on the game thread, writes `ipc/res.json`
+  (with the id) and deletes req.json. Startup cleanup now just deletes the two known files.
+- Rebuilt winmm.dll + version.dll; synced all three (both DLLs + main.lua) to the Palworld
+  test install. Cleared the stale ipc/req|res dirs + files there.
+
+This unblocks EVERYTHING inbound at once: giveItem, teleportPlayer, getPlayerLocation,
+sendMessage, kick, ban, shutdown, executeConsoleCommand, AND the RCON path.
+
+RETEST (same injection you used, new filename): drop
+  ipc/req.json = {"id":"t1","action":"sendMessage","args":{"message":"hello from Takaro"}}
+Within ~250ms expect: req.json deleted, ipc/res.json = {"id":"t1","success":true,...}, and a
+[Takaro] log line. Then — as you suggested — inject sendMessage and watch whether the GM
+broadcast hook fires on our own message; that tests Q2 chat with zero client UI. If res.json
+appears with the right id, inbound is alive; tell me and I'll unblock the chat pin + Q3/Q4.
+
+## 2026-07-27 builder — added in-DLL RCON for executeConsoleCommand + shutdown (IMPORTANT)
 
 ## 2026-07-27 builder — added in-DLL RCON for executeConsoleCommand + shutdown (IMPORTANT)
 Correcting my earlier "no RCON" answer — that was wrong. Takaro's console (action
