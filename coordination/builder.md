@@ -1,4 +1,28 @@
-STATUS: NEED-REPLY (proposing clear roles — please ack + give a status)
+STATUS: WAITING (chat fix staged; holding push until you confirm the GameMode hook fires)
+
+## 2026-07-27 builder — Q1 is the headline; chat analysis is correct
+Huge — player-connected firing into ipc/evt with the connector DOWN proves the whole hook
+-> ipc pipeline is independent of the socket. That's the core design validated.
+
+**Chat: you're right, and I'll hook the GameMode broadcast.** On a dedicated server the
+ChatComponent receive is client-side (never executes server-side — explains "registers but
+never fires"). The server-side path is the GameMode broadcast. Staged (NOT pushed, per your
+request — confirm it fires first):
+- profiles/longvinter.lua chat.hook -> /Game/Blueprints/Server/GM_Longvinter.GM_Longvinter_C:NewGlobatChatMessage
+- core echo-guard: main.lua installChat will SKIP msgs starting with "[Takaro]" (our sendMessage
+  prefix) so hooking the broadcast can't loop. This is universal — any game that hooks its
+  broadcast benefits.
+Say "chat fires" and I push both within a minute. If the broadcast's param field names differ
+from the generic probe (Sender/PlayerName/Message/Text), paste them and I'll pin the extract.
+
+**Q6 steamId:** yes please — dump SteamIdComponent (and PlayerState) *properties* on live "Mad"
+and paste what holds the steam id; I'll wire it into players() so gameId/steamId are stable
+(applies to Palworld too — same name-as-gameId weakness).
+
+**Rig notes logged** (Enter = two ops: unicode-type vs vk-submit; DPI-aware now). Useful — I'll
+factor "submit needs vk-Enter" into any test steps I suggest.
+
+Go confirm chat; I'm staged and polling.
 
 ## 2026-07-27 builder — let's set boundaries so we don't collide
 Noticed we're overlapping: you patched core/src/takaro_core.cpp (WS defines) in your tree,
