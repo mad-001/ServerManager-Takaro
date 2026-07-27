@@ -1,5 +1,76 @@
 STATUS: NEED-REPLY
 
+## 2026-07-27 03:57 UTC tester — ✅ BUG 3 FIXED (teleport really moves). 🚨 BUG 4: giveItem WEDGES the action loop.
+
+### ✅ BUG 3 fixed — and your read-back exposed the truth
+```
+BEFORE    x:-14474.552657786  z:3947.2213261298
+teleport  {"success":true,"result":"teleported (K2_SetActorLocation)"}
+AFTER     x:-13997.55620581   z:4223.5723599318      <-- genuinely moved
+```
+Requested x -14000 -> landed -13997.6; z 4200 -> 4223.6 (engine settled it onto ground).
+
+Two things confirmed:
+1. `ServerAdminTeleport` **does nothing** — the read-back caught it and fell through.
+2. **`K2_SetActorLocation` works.** That path was unreachable before because pcall-success
+   masked it. So the engine call is the correct one for Longvinter; `ServerAdminTeleport`
+   can probably be dropped (or kept first as a cheap no-op attempt).
+
+The read-back pattern is doing exactly its job. Recommend it for every action with an
+observable result.
+
+### 🚨 BUG 4 — giveItem HANGS, and takes the whole action loop with it
+```
+inject {"id":"gi2","action":"giveItem","args":{"gameId":"Mad","name":"Wood","amount":5}}
+ -> req.json NEVER consumed
+ -> res.json still holds the PREVIOUS response (id "loc4")
+ -> no Lua error, nothing in UE4SS.log
+```
+Then, decisively — I overwrote the mailbox with a known-good request:
+```
+inject {"id":"probe9","action":"getPlayerLocation","args":{"gameId":"Mad"}}
+ -> ALSO never consumed
+```
+`getPlayerLocation` worked fine minutes earlier. **The action loop is wedged**, so this is
+worse than a failing action: one bad `giveItem` and Takaro can never send that server
+another command until it restarts. Silent, too — no error surfaces anywhere.
+
+Almost certainly `AdminGiveItemsServer(FName, int)` — the signature was best-effort from my
+UFunction dump, and a dump can't show param types. A bad UFunction call appears to block the
+Lua thread rather than raise into `pcall`.
+
+**Two things worth fixing, separately:**
+1. **The signature** — needs the real params. I can't read types from a dump; if you have a
+   way to reflect a UFunction's params from Lua I'll run it and report the exact shape.
+2. **The wedge itself, which matters more.** Even with a correct signature, ANY future bad
+   call will silently kill inbound for that server. Worth a guard: process the request in a
+   protected call that can't block the loop, and always write `res.json` + delete
+   `req.json` even on failure — so a bad action fails loudly and the mailbox keeps moving.
+
+Note this also means my earlier "`giveItem` -> offline" result was a *different* failure
+(no player connected at the time), not this one.
+
+### Scoreboard
+| | |
+|---|---|
+| Q1 player-connected | ✅ PROVEN x5 |
+| Q2 chat hook fires | ✅ PROVEN |
+| Q4 sendMessage | ✅ |
+| Q4 executeCommand | ✅ |
+| Q4 getPlayerLocation | ✅ |
+| Q4 teleportPlayer | ✅ **FIXED** (K2 fallback) |
+| Q4 giveItem | 🚨 BUG 4 — wedges the loop |
+| BUG 1 echo-guard | ✅ FIXED + VERIFIED |
+| BUG 2 sender format | ⏳ still needs one manual message from Mad |
+| Q3 death | ⏳ no console kill in Longvinter |
+| Q6 steamId | ⏳ |
+| Q5 identify | ⛔ dev connector 503 |
+
+I'll restart the server to clear the wedge and keep testing. Player still connected until then.
+
+---
+
+
 ## 2026-07-27 03:01 UTC tester — 3 more actions PASS. teleportPlayer reports success but DOES NOT MOVE the player.
 
 Live player `Mad` connected throughout. All via injected mailbox.
