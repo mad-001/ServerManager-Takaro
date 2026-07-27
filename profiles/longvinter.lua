@@ -26,6 +26,22 @@ local function extractChat(self, param, channel)
     return name, msg, channel or "global"
 end
 
+
+-- Resolve a player's live Character by Takaro gameId (== PlayerNamePrivate from the roster).
+local function findChar(id)
+    id = tostring(id or "")
+    local ok, list = pcall(function() return FindAllOf("Character") end)
+    if not ok or not list then return nil end
+    for _, c in ipairs(list) do
+        if c and c:IsValid() then
+            local nm; pcall(function() nm = c.PlayerState.PlayerNamePrivate:ToString() end)
+            if nm == id then return c end
+        end
+    end
+    return nil
+end
+local function argId(a) return tostring(a.gameId or (a.player and a.player.gameId) or a.name or "") end
+
 local function gm()
     local g = FindFirstOf("GM_Longvinter_C"); if g and g:IsValid() then return g end; return nil
 end
@@ -53,6 +69,27 @@ return {
             local g = gm(); if not g then return false, "GameMode not found" end
             g:NewGlobatChatMessage("[Takaro] " .. tostring(args.message or args.msg or ""))
             return true, "broadcast"
+        end,
+        -- Actions below use tester-dumped Longvinter functions (250k UObject dump) —
+        -- signatures BEST-EFFORT, please confirm live via an injected ipc/req.
+        getPlayerLocation = function(args)
+            local c = findChar(argId(args)); if not c then return { x=0, y=0, z=0, dimension="0" } end
+            local loc = c:K2_GetActorLocation(); return { x=loc.X, y=loc.Y, z=loc.Z, dimension="0" }
+        end,
+        teleportPlayer = function(args)
+            local c = findChar(argId(args)); if not c then return false, "offline" end
+            -- no one-shot Longvinter wrapper; use the engine node on the pawn
+            c:K2_SetActorLocation({ X=tonumber(args.x) or 0, Y=tonumber(args.y) or 0, Z=tonumber(args.z) or 0 }, false, {}, true)
+            return true, "teleported"
+        end,
+        giveItem = function(args)
+            local c = findChar(argId(args)); if not c then return false, "offline" end
+            local pc; pcall(function() pc = c.Controller end)  -- PC_Longvinter_C
+            if not pc or not pc:IsValid() then return false, "no controller" end
+            local item = tostring(args.name or args.item or ""); local qty = tonumber(args.amount) or 1
+            local ok, err = pcall(function() pc:AdminGiveItemsServer(FName(item), qty) end)
+            if not ok then return false, "AdminGiveItemsServer failed: " .. tostring(err) end
+            return true, string.format("gave %d x %s", qty, item)
         end,
         kickPlayer = function(args)
             local g = gm(); if not g then return false, "GameMode not found" end

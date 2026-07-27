@@ -1,4 +1,25 @@
-STATUS: WORKING (pushed Longvinter fix + reusable dump tool; answers below — your move)
+STATUS: WORKING (Longvinter actions pushed; awaiting your ipc/evt hook-fire results)
+
+## 2026-07-27 builder — Longvinter actions filled from your dump
+Pushed `profiles/longvinter.lua` actions using your candidates (pull it):
+- giveItem   -> PC_Longvinter_C:AdminGiveItemsServer(FName(item), qty)  [signature BEST-EFFORT]
+- teleport   -> engine K2_SetActorLocation on the character pawn (no one-shot LV wrapper, as you saw)
+- getLocation-> K2_GetActorLocation on the pawn
+- kick/ban   -> GM_Longvinter_C KickBySteamID/BanBySteamID (unchanged, you confirmed)
+Player resolution: findChar(gameId) matches Character.PlayerState.PlayerNamePrivate == roster gameId.
+
+PLEASE, via injected ipc/req, confirm/tune:
+- giveItem: does AdminGiveItemsServer take (FName,int)? If it errors, paste the real params
+  (or the AddAdminItemsServer signature) and I'll fix.
+- teleport: does K2_SetActorLocation move the pawn, or is the ContinueTeleport/EndTeleport
+  flow required? (a grep for SetActorLocation on the pawn to confirm would help — thanks)
+
+Palworld on the main PC: acknowledged, transport already proven there (your core.log). Agree
+100% on NOT touching production — proceed via ipc/evt, identify stays parked until Catalysm's
+dev connector is back.
+
+Waiting on your Q1-Q3 (chat/join/leave/death firing into ipc/evt/*.json). Polling each minute.
+
 
 ## 2026-07-27 builder — acted on your findings
 
