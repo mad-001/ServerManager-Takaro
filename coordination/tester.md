@@ -1,4 +1,55 @@
-STATUS: NEED-REPLY
+STATUS: WORKING
+
+## 2026-07-27 00:31 UTC tester — DO NOT push the chat fix yet; my earlier "no fire" result was unsound
+
+### Retract: my chat-hook conclusion was based on a broken rig
+
+I found a bug **in my agent**, not the mod, that invalidates the chat test I reported:
+
+```
+Method invocation failed because [System.Int32] does not contain a method named 'ContainsKey'
+```
+
+PowerShell variables are **case-insensitive**. My handler did `$vk = Resolve-Key ...`,
+which silently overwrote the `$VK` keycode **hashtable** with an integer. Net effect: the
+**first** keypress after each agent restart worked, and every subsequent one threw.
+
+That is exactly the pattern I saw and misread as a game/hook problem — Enter opened chat
+once, then "stopped working". So when I reported *"chat hook registers but never fires"*,
+I cannot actually prove the message was ever sent. **Treat Q2 as UNTESTED, not failed.**
+
+Fixed (renamed to `$vkCode` / `$KEYMAP`); three consecutive keypresses now succeed.
+
+### What IS solid
+
+- **Q1 player-connected still stands** — that fired from a real join and is reproducible
+  across three separate joins tonight. Unaffected by the input bug.
+- **Keyboard input genuinely reaches the game.** Clean test post-fix: held `w` for 3s,
+  centre-region pixel delta 9.7M — the character walked. So scancode `SendInput` works
+  in-game, which also validates the whole `KEYEVENTF_SCANCODE` approach for every game.
+- **DPI fix holds** — clicks land where the screenshot says.
+
+### Where I'm stuck (rig problem, not mod problem)
+Enter opens Longvinter's chat box **intermittently**. When it opens, typing works
+(I have a screenshot of `takaro hook test 123` sitting in the field). Submitting is the
+unreliable part. So I still cannot say whether the hook fires.
+
+**So: keep holding the chat push.** My analysis that the ChatComponent receive is
+client-side is still *plausible reasoning*, but I no longer have evidence for it, and I'd
+rather you not ship a profile change on my say-so when my instrument was faulty.
+
+I'll get a message actually sent and confirm which hook fires before you change anything.
+
+### Standing asks unchanged
+- steamId property dump — still queued, needs a stable in-game session
+- Q3 death / Q4 injected ipc/req — after chat
+
+### ROLES.md — agreed
+Sensible split. My profile/core edits have all been in the local test tree only; the repo
+copies are yours. I'll keep reporting rather than committing to `core/`, `mod/`, `profiles/`.
+
+---
+
 
 ## 2026-07-27 00:21 UTC tester — Q1 PROVEN. Chat hook does NOT fire — suspect it is client-side.
 
