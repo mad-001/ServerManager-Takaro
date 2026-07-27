@@ -229,11 +229,54 @@ local function consoleCommand(cmd)
     return ok, err
 end
 
+-- ── UFunction reflection (READ-ONLY — never calls the function) ────────────────
+-- A wrong-signature UFunction call hard-hangs the game thread and pcall can't catch it
+-- (BUG 4). Reflecting params first lets a handler refuse to blind-call an unknown shape.
+function TC.reflectParams(func)
+    if not func then return nil end
+    if not pcall(function() return func:IsValid() end) then return nil end
+    local params = {}
+    local ok = pcall(function()
+        func:ForEachProperty(function(prop)
+            local name = "?"; pcall(function() name = prop:GetFName():ToString() end)
+            local ptype = "?"; pcall(function() ptype = prop:GetClass():GetFName():ToString() end)
+            local ret = false; pcall(function() ret = prop:HasAnyPropertyFlags(0x400) end)  -- CPF_ReturnParm
+            params[#params+1] = { name = name, type = ptype, ret = ret }
+        end)
+    end)
+    if not ok then return nil end
+    return params
+end
+function TC.findFuncOnClass(obj, fname)
+    local target = nil
+    pcall(function()
+        obj:GetClass():ForEachFunction(function(f)
+            local n; pcall(function() n = f:GetFName():ToString() end)
+            if n == fname then target = f end
+        end)
+    end)
+    return target
+end
+
 -- Universal fallbacks — used when the profile doesn't define its own handler AND the DLL
 -- didn't already handle the action over RCON. When RCON is configured (RCON_PORT in
 -- TakaroConfig.txt) the core runs executeConsoleCommand/shutdown against the game's own
 -- RCON before it ever reaches here; these are the no-RCON path (mod is IN the process).
 local builtins = {}
+-- reflect: dump a UFunction's params WITHOUT calling it. Pass args.path (full object path)
+-- OR args.class + args.func (finds a live instance of the class, then the function).
+builtins.reflect = function(args)
+    local func = nil
+    if args.path and args.path ~= "" then pcall(function() func = StaticFindObject(tostring(args.path)) end) end
+    if (not func) and args.class and args.func then
+        local inst; pcall(function() inst = FindFirstOf(tostring(args.class)) end)
+        if inst and inst:IsValid() then func = TC.findFuncOnClass(inst, tostring(args.func)) end
+    end
+    if not func then return false, "reflect: not found (give args.path OR args.class+args.func)" end
+    local p = TC.reflectParams(func)
+    if not p then return false, "reflect: could not enumerate params (ForEachProperty unavailable on this build)" end
+    return true, { success = true, params = p }
+end
 builtins.shutdown = function()
     local ok, err = consoleCommand("quit")          -- graceful engine shutdown (saves)
     if ok then return true, { success = true, rawResult = "shutdown (console quit)" } end
@@ -276,16 +319,21 @@ local function processReqFile()
     local msg = json.decode(raw)
     if not msg or not msg.action then deleteFile(TC.REQ_FILE); return end
     local id = tostring(msg.id or "0")
-    if id == TC.lastReqId then return end        -- already accepted; awaiting game-thread delete
+    if id == TC.lastReqId then return end        -- already accepted; ignore until overwritten
     TC.lastReqId = id
-    -- game mutations must run on the game thread
+    -- Consume the request from the mailbox NOW, on the poll thread, BEFORE handing the work
+    -- to the game thread. If a handler ever stalls or dies on the game thread (e.g. a bad
+    -- UFunction call — see BUG 4: a wrong-signature call hard-hangs and pcall can't catch it),
+    -- the mailbox is already free: the next request still gets read, and the DLL sees an
+    -- honest per-action timeout for the stalled one instead of the whole inbound path silently
+    -- wedging on a stale file. (Game mutations still run on the game thread.)
+    deleteFile(TC.REQ_FILE)
     ExecuteInGameThread(function()
         local ok, out = pcall(dispatch, msg.action, msg.args)
         local res = ok and out or { success = false, error = tostring(out) }
         if type(res) ~= "table" then res = { success = true, result = res } end
         res.id = id                              -- DLL accepts only the matching id
-        writeAtomic(TC.RES_FILE, json.encode(res))
-        deleteFile(TC.REQ_FILE)
+        pcall(function() writeAtomic(TC.RES_FILE, json.encode(res)) end)
     end)
 end
 

@@ -49,6 +49,34 @@ local function findChar(id)
 end
 local function argId(a) return tostring(a.gameId or (a.player and a.player.gameId) or a.name or "") end
 
+-- UFunction reflection (READ-ONLY, never calls). A wrong-signature call hard-hangs the game
+-- thread (BUG 4), so giveItem reflects before calling and refuses unknown shapes.
+local function reflectParams(func)
+    if not func then return nil end
+    if not pcall(function() return func:IsValid() end) then return nil end
+    local params = {}
+    local ok = pcall(function()
+        func:ForEachProperty(function(prop)
+            local name = "?"; pcall(function() name = prop:GetFName():ToString() end)
+            local ptype = "?"; pcall(function() ptype = prop:GetClass():GetFName():ToString() end)
+            local ret = false; pcall(function() ret = prop:HasAnyPropertyFlags(0x400) end)  -- CPF_ReturnParm
+            params[#params+1] = { name = name, type = ptype, ret = ret }
+        end)
+    end)
+    if not ok then return nil end
+    return params
+end
+local function findFuncOnClass(obj, fname)
+    local target = nil
+    pcall(function()
+        obj:GetClass():ForEachFunction(function(f)
+            local n; pcall(function() n = f:GetFName():ToString() end)
+            if n == fname then target = f end
+        end)
+    end)
+    return target
+end
+
 local function gm()
     local g = FindFirstOf("GM_Longvinter_C"); if g and g:IsValid() then return g end; return nil
 end
@@ -110,9 +138,30 @@ return {
             local pc; pcall(function() pc = c.Controller end)  -- PC_Longvinter_C
             if not pc or not pc:IsValid() then return false, "no controller" end
             local item = tostring(args.name or args.item or ""); local qty = tonumber(args.amount) or 1
-            local ok, err = pcall(function() pc:AdminGiveItemsServer(FName(item), qty) end)
-            if not ok then return false, "AdminGiveItemsServer failed: " .. tostring(err) end
-            return true, string.format("gave %d x %s", qty, item)
+            -- BUG 4: AdminGiveItemsServer's signature was a guess, and a wrong-arity/type call
+            -- HARD-HANGS the game thread (pcall can't catch it). Reflect the params first and
+            -- ONLY call if the shape is one we can safely fill; otherwise report the discovered
+            -- signature so it can be pinned, without ever risking the wedge.
+            local func = findFuncOnClass(pc, "AdminGiveItemsServer")
+            local params = func and reflectParams(func) or nil
+            if not params then
+                return false, "giveItem: could not reflect AdminGiveItemsServer — not blind-calling (would risk a game-thread wedge). Run the 'reflect' action to get its signature."
+            end
+            local inp = {}
+            for _, p in ipairs(params) do if not p.ret then inp[#inp+1] = p end end
+            local t1 = inp[1] and inp[1].type
+            local t2 = inp[2] and inp[2].type
+            -- known-safe shape: (Name|Str item, Int quantity)
+            if #inp == 2 and (t1 == "NameProperty" or t1 == "StrProperty") and t2 == "IntProperty" then
+                local a1 = (t1 == "NameProperty") and FName(item) or item
+                local ok, err = pcall(function() pc:AdminGiveItemsServer(a1, qty) end)
+                if not ok then return false, "AdminGiveItemsServer failed: " .. tostring(err) end
+                return true, string.format("gave %d x %s", qty, item)
+            end
+            local desc = {}
+            for _, p in ipairs(inp) do desc[#desc+1] = (p.name or "?") .. ":" .. (p.type or "?") end
+            return false, "giveItem held (BUG 4): AdminGiveItemsServer signature is [" ..
+                table.concat(desc, ", ") .. "] — map these params before calling (not blind-calling to avoid a wedge)"
         end,
         kickPlayer = function(args)
             local g = gm(); if not g then return false, "GameMode not found" end

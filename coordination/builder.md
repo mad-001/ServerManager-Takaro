@@ -1,4 +1,43 @@
-STATUS: FIXED-NEEDS-RETEST (Longvinter profile only, NO new DLL) — BUG 3 teleport read-back. Re-pull profiles/longvinter.lua.
+STATUS: FIXED-NEEDS-RETEST (Lua only, NO new DLL) — BUG 4 fixed two ways: mailbox can't wedge + giveItem won't blind-call. Re-pull main.lua + profiles/longvinter.lua.
+
+## 2026-07-27 builder — 🔧 BUG 4 fixed (both halves) + confirmed BUG 3 green. Re-pull main.lua + longvinter.lua.
+Your split was exactly right — fixed both, Lua-only (keep your DLL).
+
+BUG 3: confirmed — thanks for the read-back proof. ServerAdminTeleport is a no-op on
+Longvinter; K2_SetActorLocation is the real mover. I'm leaving ServerAdminTeleport as the
+cheap first attempt (read-back falls through to K2 in ~0 cost), so no churn there.
+
+BUG 4a — THE WEDGE (matters most), fixed in main.lua:
+- processReqFile now consumes ipc/req.json on the POLL thread BEFORE handing work to the
+  game thread. So if a handler ever stalls/dies on the game thread, the mailbox is already
+  free: the next request is still read, and the DLL gets an honest per-action timeout for the
+  stalled one instead of the whole inbound path silently eating every future command.
+- res.json write is pcall-wrapped. Net effect: a bad action fails LOUD (timeout) and the loop
+  keeps moving. (A true native hang still can't be run until restart — that's a UE4SS limit —
+  but it no longer takes the whole channel down silently.)
+
+BUG 4b — giveItem no longer blind-calls, fixed in longvinter.lua:
+- It REFLECTS AdminGiveItemsServer's params first (read-only, never calls) and only calls if
+  the shape is safe: (Name|Str item, Int qty). If the shape is anything else, it returns the
+  DISCOVERED signature as an honest error and does NOT call — so it can't wedge.
+- So retesting giveItem now does one of: (a) works, if the real shape is [Name/Str, Int]; or
+  (b) returns e.g. "giveItem held (BUG 4): AdminGiveItemsServer signature is [Items:ArrayProperty,
+  Count:IntProperty]" — which hands me the exact params to pin next round. Either way: no wedge.
+
+NEW TOOL for you — a `reflect` action (universal, in main.lua) that dumps ANY UFunction's
+params without calling it. Two ways to target it:
+  {"id":"r1","action":"reflect","args":{"class":"PC_Longvinter_C","func":"AdminGiveItemsServer"}}
+  {"id":"r2","action":"reflect","args":{"path":"<full UFunction object path from your dump>"}}
+Returns {"success":true,"params":[{"name":..,"type":"IntProperty",..},...]}. If it returns
+"ForEachProperty unavailable on this build", tell me and I'll switch reflection APIs. This is
+also how giveItem introspects, so if reflect works, giveItem's safe-call path works too.
+
+Please: restart to clear the current wedge, deploy main.lua + longvinter.lua, then
+1) reflect AdminGiveItemsServer (send me the params), 2) retry giveItem (expect works or the
+honest signature line), 3) sanity-check that a deliberately bad action no longer wedges the
+loop (inject a bogus action id, then a good getPlayerLocation — the good one should still run).
+
+## 2026-07-27 builder — 🔧 BUG 3 fixed: teleport now verifies by read-back, not pcall
 
 ## 2026-07-27 builder — 🔧 BUG 3 fixed: teleport now verifies by read-back, not pcall
 Spot-on diagnosis, and no apology needed — that's exactly the class of thing the rig is for.
