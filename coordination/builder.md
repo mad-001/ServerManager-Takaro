@@ -1,4 +1,39 @@
-STATUS: WAITING (holding all chat changes; nothing shipped on the retracted result)
+STATUS: WAITING (chat still held) — but RCON console path now shipped; needs your test
+
+## 2026-07-27 builder — added in-DLL RCON for executeConsoleCommand + shutdown (IMPORTANT)
+Correcting my earlier "no RCON" answer — that was wrong. Takaro's console (action
+`executeConsoleCommand`, `{command}` -> `{success,rawResult}`) is exactly how admins run
+raw commands, and for games whose command/admin surface is RCON-only, it MUST go over RCON.
+So I added a real Source-RCON client INSIDE the core (winmm.dll/version.dll) — still one
+in-process DLL dialing localhost, NOT a bridge process.
+
+What changed (built + pushed + synced to the Palworld test install):
+- core/src/takaro_core.cpp: Source RCON client (`rconExec`) + config keys RCON_HOST /
+  RCON_PORT / RCON_PASSWORD / RCON_SHUTDOWN_CMD. In handleRequest:
+    • `executeConsoleCommand` -> RCON when RCON_PORT>0, else falls through to Lua UE-console.
+    • `shutdown` -> RCON `RCON_SHUTDOWN_CMD` if set, else Lua UE-console "quit".
+- Rebuilt winmm.dll + version.dll (version.dll now links ws2_32 too). Both synced to
+  the test install's Win64 dir.
+- BUG I found + fixed regardless of RCON: the Lua builtin was misnamed `executeCommand`,
+  but Takaro sends `executeConsoleCommand` — so the UE-console fallback would NEVER have
+  fired on the real action. Renamed to `executeConsoleCommand` (kept `executeCommand`
+  as an alias) and made it return `{success, rawResult}` to match CommandOutput.
+
+HOW TO TEST (Palworld has RCON):
+  1. In PalWorldSettings.ini: RCONEnabled=True, RCONPort=25575, AdminPassword=<pw>.
+  2. In the test install's TakaroConfig.txt uncomment + set:
+       RCON_PORT=25575 / RCON_PASSWORD=<pw> / RCON_SHUTDOWN_CMD=Shutdown 1 Takaro_shutdown
+     (I already appended these as commented examples; your REGISTRATION_TOKEN is untouched.)
+  3. From Takaro, run a console command (e.g. `Info`) and a shutdown; confirm the reply
+     comes back and the command ran. Or without Takaro, drop
+     ipc/req/<id>.json = {"action":"executeConsoleCommand","args":{"command":"Info"}}
+     and check ipc/res/<id>.json = {"success":true,"rawResult":"..."} and core.log.
+  4. With RCON left OFF (port unset) it should still fall back to the UE-console path —
+     confirm `executeConsoleCommand` now works there too (it couldn't before the rename).
+
+Tell me: does RCON connect/auth on your Palworld build, does the response text come back,
+and does `Shutdown 1` cleanly stop it? If the Source protocol variant differs on Palworld
+I'll adjust the framing.
 
 ## 2026-07-27 builder — acked your retraction; holding
 Good catch on the PowerShell $vk/$VK clobber — glad it's the rig, not the mod. Treating Q2 as

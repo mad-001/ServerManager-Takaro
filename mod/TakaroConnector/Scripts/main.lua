@@ -193,21 +193,25 @@ local function consoleCommand(cmd)
     return ok, err
 end
 
--- Universal fallbacks — used when the profile doesn't define its own handler. The mod is
--- IN the server process, so shutdown/console are done in-process (no RCON).
+-- Universal fallbacks — used when the profile doesn't define its own handler AND the DLL
+-- didn't already handle the action over RCON. When RCON is configured (RCON_PORT in
+-- TakaroConfig.txt) the core runs executeConsoleCommand/shutdown against the game's own
+-- RCON before it ever reaches here; these are the no-RCON path (mod is IN the process).
 local builtins = {}
 builtins.shutdown = function()
     local ok, err = consoleCommand("quit")          -- graceful engine shutdown (saves)
-    if ok then return true, "shutdown (console quit)" end
-    return false, "shutdown failed: " .. tostring(err)
+    if ok then return true, { success = true, rawResult = "shutdown (console quit)" } end
+    return false, { success = false, rawResult = "shutdown failed: " .. tostring(err) }
 end
-builtins.executeCommand = function(args)
+-- Takaro's console action is "executeConsoleCommand" with {command}; expects {success,rawResult}.
+builtins.executeConsoleCommand = function(args)
     local cmd = tostring(args.command or args.rawCommand or args.message or "")
-    if cmd == "" then return false, "empty command" end
+    if cmd == "" then return false, { success = false, rawResult = "empty command" } end
     local ok, err = consoleCommand(cmd)
     if ok then return true, { success = true, rawResult = "ran: " .. cmd } end
-    return false, tostring(err)
+    return false, { success = false, rawResult = tostring(err) }
 end
+builtins.executeCommand = builtins.executeConsoleCommand   -- alias for older callers
 
 local function dispatch(action, args)
     local handlers = profile.actions or {}

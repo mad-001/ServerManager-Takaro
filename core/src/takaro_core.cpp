@@ -18,6 +18,8 @@
 // a half-written file. Entry point: StartTakaroCore() — call once on DLL load.
 
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>       // must precede windows.h; used by the in-DLL RCON client
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <winhttp.h>
 
@@ -46,6 +48,17 @@ int   POLL_INTERVAL_MS = 1000;   // how often the core drains ipc/evt + reads ro
 int   REQ_TIMEOUT_MS   = 6000;   // how long a Takaro action waits for the Lua result
 bool  ENABLED          = true;
 std::string SERVER_STARTED_MSG = "Server started";
+
+// RCON (Source protocol). Optional: when RCON_PORT > 0, Takaro's console
+// (executeConsoleCommand) and any RCON-backed action are run against the game's OWN
+// RCON on localhost — because that IS how those games expose their admin/command
+// surface. Still one in-process DLL dialing localhost; not a separate bridge process.
+// These are read from TakaroConfig.txt (unlike the WS host, which is hardcoded): the
+// RCON endpoint is the operator's own local server, not a security boundary.
+std::string RCON_HOST     = "127.0.0.1";
+int         RCON_PORT     = 0;            // 0 = RCON disabled (fall back to UE console)
+std::string RCON_PASSWORD;
+std::string RCON_SHUTDOWN_CMD;            // optional: game's RCON shutdown cmd (e.g. "Shutdown 1")
 
 // Takaro websocket host. Hardcoded on purpose -- deliberately NOT readable from
 // TakaroConfig.txt, so a shipped build can never be pointed somewhere else by an
@@ -161,6 +174,10 @@ void loadConfig() {
     if (!get("SERVER_STARTED_MSG").empty()) SERVER_STARTED_MSG = get("SERVER_STARTED_MSG");
     std::string en = get("ENABLED");
     if (!en.empty()) ENABLED = (en != "false" && en != "0");
+    if (!get("RCON_HOST").empty())     RCON_HOST     = get("RCON_HOST");
+    if (!get("RCON_PORT").empty())     RCON_PORT     = atoi(get("RCON_PORT").c_str());
+    RCON_PASSWORD     = get("RCON_PASSWORD");
+    RCON_SHUTDOWN_CMD = get("RCON_SHUTDOWN_CMD");
 }
 
 std::string toSteamId64(const std::string& acct) {
@@ -210,6 +227,120 @@ std::vector<std::string> listJson(const std::string& dir) {
         return a < b;
     });
     return names;
+}
+
+// ─── Source RCON client (in-process) ──────────────────────────────────────────────
+// Many dedicated servers expose their real command/admin surface only over RCON — so
+// Takaro's console (executeConsoleCommand) has to reach the game that way. We open the
+// game's OWN RCON socket on localhost, run the command, and return its text. This is
+// still one in-process DLL talking to localhost — no separate bridge process.
+//
+// Wire format (Valve Source RCON): int32 size, int32 id, int32 type, body(ASCII)+\0, \0.
+//   type: 3 = AUTH, 2 = AUTH_RESPONSE / EXECCOMMAND, 0 = RESPONSE_VALUE.
+namespace rcon {
+    std::mutex g_mtx;          // one short-lived RCON socket at a time
+    bool       g_wsaInit = false;
+
+    bool sendPacket(SOCKET s, int32_t id, int32_t type, const std::string& body) {
+        int32_t size = (int32_t)(body.size() + 10);
+        std::vector<char> buf(4 + size, 0);
+        memcpy(&buf[0], &size, 4);
+        memcpy(&buf[4], &id, 4);
+        memcpy(&buf[8], &type, 4);
+        if (!body.empty()) memcpy(&buf[12], body.data(), body.size());
+        // last two bytes stay 0 (body null-terminator + packet null-terminator)
+        int total = (int)buf.size(), sent = 0;
+        while (sent < total) {
+            int n = send(s, buf.data() + sent, total - sent, 0);
+            if (n <= 0) return false;
+            sent += n;
+        }
+        return true;
+    }
+    bool recvAll(SOCKET s, char* out, int n) {
+        int got = 0;
+        while (got < n) {
+            int r = recv(s, out + got, n - got, 0);
+            if (r <= 0) return false;
+            got += r;
+        }
+        return true;
+    }
+    bool recvPacket(SOCKET s, int32_t& id, int32_t& type, std::string& body) {
+        char hdr[4];
+        if (!recvAll(s, hdr, 4)) return false;
+        int32_t size; memcpy(&size, hdr, 4);
+        if (size < 10 || size > 4 * 1024 * 1024) return false;
+        std::vector<char> rest(size);
+        if (!recvAll(s, rest.data(), size)) return false;
+        memcpy(&id, &rest[0], 4);
+        memcpy(&type, &rest[4], 4);
+        int bodyLen = size - 10;                    // minus id(4)+type(4)+two null bytes(2)
+        body.assign(rest.data() + 8, bodyLen > 0 ? bodyLen : 0);
+        return true;
+    }
+}
+
+// Run one command over the game's RCON. Returns true on success; fills `out` with the
+// server's text response (or an error string on failure).
+bool rconExec(const std::string& cmd, std::string& out) {
+    std::lock_guard<std::mutex> lk(rcon::g_mtx);
+    out.clear();
+    if (RCON_PORT <= 0) { out = "RCON not configured"; return false; }
+
+    if (!rcon::g_wsaInit) {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) { out = "WSAStartup failed"; return false; }
+        rcon::g_wsaInit = true;
+    }
+
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) { out = "socket() failed"; return false; }
+
+    sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons((u_short)RCON_PORT);
+    addr.sin_addr.s_addr = inet_addr(RCON_HOST.c_str());
+    if (addr.sin_addr.s_addr == INADDR_NONE) {          // not a dotted quad -> resolve
+        struct addrinfo hints, *ai = NULL; memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+        char portstr[16]; _snprintf(portstr, sizeof(portstr), "%d", RCON_PORT);
+        if (getaddrinfo(RCON_HOST.c_str(), portstr, &hints, &ai) != 0 || !ai) {
+            closesocket(s); out = "RCON host resolve failed"; return false;
+        }
+        memcpy(&addr, ai->ai_addr, sizeof(sockaddr_in));
+        freeaddrinfo(ai);
+    }
+
+    DWORD tmo = 4000;                                    // connect/auth timeout
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tmo, sizeof(tmo));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tmo, sizeof(tmo));
+    if (connect(s, (sockaddr*)&addr, sizeof(addr)) != 0) {
+        closesocket(s); out = "RCON connect failed (" + RCON_HOST + ":" + std::to_string(RCON_PORT) + ")"; return false;
+    }
+
+    // authenticate
+    if (!rcon::sendPacket(s, 1, 3, RCON_PASSWORD)) { closesocket(s); out = "RCON auth send failed"; return false; }
+    for (int i = 0; i < 4; i++) {
+        int32_t id, type; std::string body;
+        if (!rcon::recvPacket(s, id, type, body)) { closesocket(s); out = "RCON auth recv failed"; return false; }
+        if (type == 2) {                                 // AUTH_RESPONSE
+            if (id == -1) { closesocket(s); out = "RCON auth failed (bad RCON_PASSWORD)"; return false; }
+            break;
+        }
+    }
+
+    // execute + drain the response (short idle timeout terminates multi-packet reads)
+    if (!rcon::sendPacket(s, 2, 2, cmd)) { closesocket(s); out = "RCON exec send failed"; return false; }
+    DWORD drain = 800;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&drain, sizeof(drain));
+    for (int i = 0; i < 128; i++) {
+        int32_t id, type; std::string body;
+        if (!rcon::recvPacket(s, id, type, body)) break; // idle timeout / close -> done
+        if (type == 0) out += body;                      // RESPONSE_VALUE
+    }
+    closesocket(s);
+    return true;
 }
 
 // ─── WebSocket send ──────────────────────────────────────────────────────────────
@@ -293,6 +424,24 @@ void handleRequest(const std::string& requestId, const json& payload) {
     if (action == "getServerInfo") {
         sendResponse(requestId, json{{"name", IDENTITY_TOKEN.empty() ? "Unreal Server" : IDENTITY_TOKEN},
                                      {"version","unknown"}});
+        return;
+    }
+
+    // Takaro console -> executeConsoleCommand. If RCON is configured, run it against the
+    // game's own RCON (that's where the real command surface lives); otherwise fall
+    // through to the Lua UE-console path.
+    if (action == "executeConsoleCommand" && RCON_PORT > 0) {
+        std::string cmd = args.value("command", "");
+        if (cmd.empty()) cmd = args.value("rawCommand", "");
+        std::string out; bool ok = rconExec(cmd, out);
+        sendResponse(requestId, json{{"success", ok}, {"rawResult", out}});
+        return;
+    }
+    // shutdown via RCON only when the operator maps a shutdown command (RCON_SHUTDOWN_CMD);
+    // otherwise it falls through to the Lua builtin (UE console "quit").
+    if (action == "shutdown" && RCON_PORT > 0 && !RCON_SHUTDOWN_CMD.empty()) {
+        std::string out; bool ok = rconExec(RCON_SHUTDOWN_CMD, out);
+        sendResponse(requestId, json{{"success", ok}, {"rawResult", out}});
         return;
     }
 

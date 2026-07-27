@@ -11,5 +11,5 @@ x86_64-w64-mingw32-g++ -O2 -std=c++17 -shared -static -static-libgcc -static-lib
 echo "building version.dll..."
 x86_64-w64-mingw32-g++ -O2 -std=c++17 -shared -static -static-libgcc -static-libstdc++ \
   -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00 \
-  -o ../version.dll version.cpp takaro_core.cpp version.def -lwinhttp 2>/dev/null
+  -o ../version.dll version.cpp takaro_core.cpp version.def -lwinhttp -lws2_32 2>/dev/null
 ls -la ../winmm.dll ../version.dll

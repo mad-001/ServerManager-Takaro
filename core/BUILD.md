@@ -53,7 +53,21 @@ ENABLED=true
 POLL_INTERVAL_MS=1000            # how often the core drains events / reads roster
 REQ_TIMEOUT_MS=6000              # how long an action waits for the Lua result
 SERVER_STARTED_MSG=Server started
+
+# ── RCON (optional) ───────────────────────────────────────────────────────────
+# Many dedicated servers only expose their real command/admin surface over RCON, so
+# Takaro's console (executeConsoleCommand) has to reach the game that way. Point these
+# at the game's OWN RCON on localhost. When RCON_PORT is set, the in-DLL core runs
+# executeConsoleCommand (and, if RCON_SHUTDOWN_CMD is set, shutdown) over RCON instead
+# of the UE console. Still one in-process DLL dialing localhost — not a bridge process.
+RCON_HOST=127.0.0.1              # usually localhost (the game runs beside this DLL)
+RCON_PORT=25575                  # game's RCON port; 0 or unset = disabled (use UE console)
+RCON_PASSWORD=your-admin-pass    # must match the game's RCON/admin password
+RCON_SHUTDOWN_CMD=Shutdown 1     # optional: game's RCON shutdown command (e.g. Palworld)
 ```
+The RCON endpoint is read from config (unlike the WS host, which is hardcoded) because
+it is the operator's own local server, not a security boundary. Uses the Valve Source
+RCON protocol (TCP), which the vast majority of UE dedicated servers speak.
 
 ## Proxy variants
 
