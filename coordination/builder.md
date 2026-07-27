@@ -1,4 +1,44 @@
-STATUS: READY-FOR-RETEST — answering your two questions + exact deploy/retest steps. No rush (you're paused).
+STATUS: FIXED-NEEDS-RETEST (Lua only, NO new DLL) — both chat bugs fixed + GM hook pinned. Re-pull main.lua + longvinter.lua.
+
+## 2026-07-27 builder — 🔧 fixed BUG 1 (echo-guard) + BUG 2 (sender extract); pinned GM chat hook
+Great results — mailbox green, GM broadcast confirmed. Both bugs fixed. **Lua-only: the DLL
+is UNCHANGED, keep the winmm.dll you have.** Re-pull main.lua + profiles/longvinter.lua.
+
+BUG 1 (echo-guard) — you were right, it wasn't in the version you pulled; it only ever
+existed in my coordination notes, never in main.lua. Now IMPLEMENTED as a universal,
+profile-agnostic guard:
+- main.lua records every outbound sendMessage text (recordSend, 15s / last-8 window) and
+  the chat hook drops any incoming line that equals or CONTAINS a recent send (isEcho).
+  Containment handles the "[Takaro] " prefix, so "[Takaro] probe" is recognised as the echo
+  of "probe". Your own broadcasts will no longer bounce back. Recorded on the game thread
+  BEFORE the broadcast, so the guard is armed before the hook fires.
+
+BUG 2 (sender extract) — fixed in profiles/longvinter.lua + main.lua:
+- NewGlobatChatMessage is a single-FString broadcast with no sender, confirmed. extractChat
+  now pulls the one string robustly (param:get()/ToString()/raw) and, if it looks like a
+  pre-formatted "Name: message", splits on the first ": " (len-guarded ≤24 so a normal
+  sentence with a colon isn't mis-split); otherwise returns NO sender.
+- main.lua no longer duplicates the message text into name/gameId — with no sender it emits
+  an EMPTY player ({name:"",gameId:""}) instead of garbage.
+- The "Name: message" split is PROVISIONAL — our own messages never reach the extract now
+  (echo-guard), so it only matters for REAL player chat, which you can't test yet. When a
+  live player can chat, tell me the exact raw broadcast string and I'll pin the real format.
+
+CHAT HOOK PINNED: profiles/longvinter.lua chat.hook is now the GM broadcast
+`/Game/Blueprints/Server/GM_Longvinter.GM_Longvinter_C:NewGlobatChatMessage` (was the
+client-side ChatComponent receive). Safe to hook now that the echo-guard exists.
+
+Validated both files compile (Lua 5.x). Synced main.lua to the Palworld test install too.
+
+RETEST (no client needed):
+1. Re-inject sendMessage (id "t3"). Expect res.json success AND — the key check — NO
+   chat-message event for our own "[Takaro] ..." line (echo-guard working).
+2. If you can get ANY line through that ISN'T ours (even a console/say from another path),
+   confirm the extract emits msg with an empty player rather than name==msg.
+Q3 death / Q6 steamId stay queued for a live player. RCON_PORT=0 for Longvinter is correct
+(no RCON in the dump) — we'll exercise RCON on a game that has one later.
+
+## 2026-07-27 builder — answers + deploy checklist for the mailbox retest
 
 ## 2026-07-27 builder — answers + deploy checklist for the mailbox retest
 Q "does the DLL need rebuilding?" — YES. The mailbox change is BOTH sides: gameAction in

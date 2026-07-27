@@ -3,29 +3,34 @@
 -- LongvinterFunctionsCPP, etc.), but chat/death/player logic is Blueprint — the gameplay
 -- hooks live under /Game/..., not /Script/Longvinter.LongvinterGameState (which doesn't exist).
 -- Hook paths VERIFIED via a live 250k-UObject dump on a running dedicated server (tester).
---   chat receive : /Game/ThirdPersonCPP/Blueprints/ChatComponent.ChatComponent_C:NewGlobalChatMessage
---   team chat    : /Game/ThirdPersonCPP/Blueprints/ChatComponent.ChatComponent_C:NewTeamChatMessage
 --   death        : /Game/ThirdPersonCPP/Blueprints/ThirdPersonCharacter.ThirdPersonCharacter_C:DeathServer
---   broadcast    : /Game/Blueprints/Server/GM_Longvinter.GM_Longvinter_C:NewGlobatChatMessage  [sic]
--- NOTE: hook the RECEIVE fn for chat capture; the misspelled GameMode NewGlobatChatMessage is the
--- server BROADCAST (used by sendMessage) — hooking it would echo Takaro's own messages back.
+--   chat broadcast: /Game/Blueprints/Server/GM_Longvinter.GM_Longvinter_C:NewGlobatChatMessage  [sic]
+-- CHAT HOOK CONFIRMED (tester, 2026-07-27 01:39 UTC): the GameMode NewGlobatChatMessage
+-- broadcast DOES fire server-side and produces a real chat-message event. We hook THAT (not
+-- the client-side ChatComponent receive). Because sendMessage also calls it, our own messages
+-- would echo — the universal echo-guard in main.lua (records outbound sends, drops the echo)
+-- handles that, so hooking the broadcast is safe. It is a SINGLE-FString broadcast: one param,
+-- the whole (possibly pre-formatted) line, no sender field.
 
 local function str(v) local o, r = pcall(function() return v:ToString() end); return o and r or nil end
 
--- best-effort field extraction (confirm field names against a live chat once it fires)
+-- The broadcast carries one FString and no sender. Pull the string robustly; if the server
+-- pre-formats a real player's line as "Name: message", split it — otherwise emit with no
+-- sender (the core then sends an empty player rather than garbage).
+-- PROVISIONAL: the "Name: message" split is unconfirmed until a live player can chat; our own
+-- messages never reach here (echo-guard), so this only matters for real player chat.
 local function extractChat(self, param, channel)
-    local ok, s = pcall(function() return param:get() end)
-    local o = ok and s or param
-    local name, msg
-    for _, k in ipairs({ "PlayerName", "Sender", "Name", "SenderName", "Player" }) do
-        local a, v = pcall(function() return o[k] end); if a and v then name = str(v) or name end
-        if name then break end
+    local text
+    local ok1, v1 = pcall(function() return param:get() end)
+    if ok1 and v1 then text = str(v1) or (type(v1) == "string" and v1) or nil end
+    if not text then local ok2, v2 = pcall(function() return param:ToString() end); if ok2 then text = v2 end end
+    if not text and type(param) == "string" then text = param end
+    text = text or ""
+    local name, msg = text:match("^(.-):%s(.*)$")
+    if name and msg and #name > 0 and #name <= 24 then
+        return name, msg, channel or "global"
     end
-    for _, k in ipairs({ "Message", "Text", "Msg", "ChatMessage", "Content" }) do
-        local a, v = pcall(function() return o[k] end); if a and v then msg = str(v) or msg end
-        if msg then break end
-    end
-    return name, msg, channel or "global"
+    return nil, text, channel or "global"
 end
 
 
@@ -52,7 +57,8 @@ return {
     name = "Longvinter",
 
     chat = {
-        hook = "/Game/ThirdPersonCPP/Blueprints/ChatComponent.ChatComponent_C:NewGlobalChatMessage",
+        -- CONFIRMED firing server-side (tester 01:39 UTC). Self-echo handled by main.lua's guard.
+        hook = "/Game/Blueprints/Server/GM_Longvinter.GM_Longvinter_C:NewGlobatChatMessage",
         extract = function(self, param) return extractChat(self, param, "global") end,
     },
 

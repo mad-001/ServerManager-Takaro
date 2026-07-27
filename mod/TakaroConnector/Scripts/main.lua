@@ -137,6 +137,32 @@ local function resolveHook(spec)
     return nil
 end
 
+-- ── Echo suppression ──────────────────────────────────────────────────────────
+-- Takaro's sendMessage makes us broadcast in-game, which trips our OWN chat hook and
+-- would bounce straight back as an inbound chat-message (a feedback loop the instant a
+-- module echoes chat). Record what we send and drop any incoming line carrying that text
+-- for a short window. Profile-agnostic: works whatever prefix (if any) a profile adds.
+TC.recentSends = {}   -- { {text=, at=}, ... }, most-recent last
+local function nowSecs() local ok, t = pcall(os.time); return ok and t or 0 end
+local function recordSend(text)
+    text = tostring(text or "")
+    if text == "" then return end
+    local now, keep = nowSecs(), {}
+    for _, e in ipairs(TC.recentSends) do if now - e.at <= 15 then keep[#keep+1] = e end end
+    keep[#keep+1] = { text = text, at = now }
+    while #keep > 8 do table.remove(keep, 1) end
+    TC.recentSends = keep
+end
+local function isEcho(msg)
+    msg = tostring(msg or "")
+    if msg == "" then return false end
+    for _, e in ipairs(TC.recentSends) do
+        -- our broadcast may be prefixed (e.g. "[Takaro] "), so match by containment too
+        if e.text ~= "" and (msg == e.text or msg:find(e.text, 1, true)) then return true end
+    end
+    return false
+end
+
 local function installChat()
     local spec = profile.chat
     if spec then
@@ -153,8 +179,12 @@ local function installChat()
                 local name, msg, channel = spec.extract(self, a, b, c)
                 if not msg or msg == "" then return end
                 if msg:sub(1,1) == "/" then return end          -- skip slash-commands
+                if isEcho(msg) then return end                  -- skip our own broadcasts (no feedback loop)
+                -- A single-FString server broadcast has no sender; emit an empty player
+                -- rather than duplicating the message text into name/gameId.
+                local gid = spec.gameId and spec.gameId(self,a,b,c) or name
                 TC.emit("chat-message", {
-                    player  = { name = name or "", gameId = spec.gameId and spec.gameId(self,a,b,c) or (name or "") },
+                    player  = { name = name or "", gameId = gid or "" },
                     msg     = msg,
                     channel = channel or "global",
                 })
@@ -225,6 +255,9 @@ local function dispatch(action, args)
     if not h then
         return { success = false, error = "Action not implemented in profile: " .. tostring(action) }
     end
+    -- record outbound chat BEFORE broadcasting so the echo-guard is armed when our own
+    -- message trips the chat hook a moment later (both run on the game thread).
+    if action == "sendMessage" then recordSend((args or {}).message or (args or {}).msg) end
     local ok, a, b = pcall(h, args or {})
     if not ok then return { success = false, error = tostring(a) } end
     -- handler may return (result) or (success, message/result)
