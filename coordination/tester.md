@@ -1,4 +1,82 @@
-STATUS: WORKING
+STATUS: NEED-REPLY
+
+## 2026-07-27 01:06 UTC tester — 🚨 CRITICAL: ipc/req is NEVER drained. ALL Takaro→game actions are dead.
+
+This is bigger than chat. **`listDir()` in main.lua returns nothing on this UE4SS build**,
+so the action poll loop never sees a request. Every action — giveItem, teleportPlayer,
+getPlayerLocation, sendMessage, kick, ban, and your new shutdown/executeCommand — can
+never execute. The mod can report events TO Takaro but cannot receive anything FROM it.
+
+### Evidence (decisive, not inference)
+
+1. Injected `ipc/req/test1785114208.json` = `{"action":"sendMessage","args":{"message":"..."}}`
+2. Waited 10s (poll is 250ms). **Not consumed.** No `ipc/res`. No event. No log line.
+3. Confirmed the laptop itself sees the file — `69 bytes`, correct dir, correct name:
+   ```
+   Name                Length LastWriteTime
+   test1785114208.json     69 7/26/2026 8:03:28 PM
+   ```
+4. No `req poll error` in UE4SS.log — so `pcall` isn't catching an exception; the loop
+   simply iterates an **empty list**.
+5. **The clincher:** main.lua line ~222 clears stale req/res at startup using the same
+   `listDir`. I restarted the server with that file present — **it survived the restart.**
+   If `listDir` worked, startup would have deleted it.
+
+### Root cause
+
+```lua
+local function listDir(path)
+    local h = io.popen('cmd /c "dir /B \\"' .. winPath(path) .. '\\" 2>nul"')   -- <-- returns nothing
+```
+
+`io.popen` appears unavailable/no-op in this UE4SS Lua build. Consistent with what else
+works:
+- `writeAtomic` / `readFile` use **`io.open`** -> WORK (players.json is written every cycle,
+  ipc/evt files are written correctly)
+- `listDir` uses **`io.popen`** -> FAILS silently, returns `{}`
+
+So it's specifically the popen path. Note the old Longvinter `TakaroAgent` used this same
+`io.popen` + `dir /B` trick — worth checking whether that ever actually worked, or whether
+the external bridge only ever exercised the write side.
+
+### Why nothing looked broken until now
+Everything that has ever been "verified" is **outbound** (hooks -> emit -> ipc/evt -> DLL).
+The inbound path has no test that doesn't require a live server, so it shipped untested.
+This is exactly the class of bug the rig exists to find.
+
+### Suggested fix — yours to implement (ROLES.md), but the shape
+
+Avoid directory enumeration entirely. Options, cheapest first:
+
+1. **Single-file mailbox.** DLL writes `ipc/req.json` (one pending request, or a JSON array);
+   Lua reads it with `io.open`, processes, deletes/truncates, writes `ipc/res.json`.
+   Uses only the io.open path that's already proven working. Smallest change.
+2. **Index file.** DLL also writes `ipc/req/_index` listing pending ids; Lua reads that with
+   `io.open` instead of listing the dir. Keeps the multi-file protocol.
+3. **UE4SS native FS API** if the build exposes one — but (1) needs no UE4SS features at all,
+   so it's the safest across the 172 games.
+
+I'd take (1) — the multi-file design exists only because directory listing was assumed to
+work, and it doesn't.
+
+Tell me when it's pushed and I'll retest immediately with an injected request; I have a
+live server + connected player standing by.
+
+### Chat (Q2) — still not confirmed, and now lower priority
+GM broadcast hook registers. Typing works, submitting is unreliable via synthetic input
+(Mad confirmed Enter works when a human presses it over RustDesk, so it's my input path,
+not the game). Not chasing it further until the req fix lands, because:
+**if you fix ipc/req, I can test chat by injecting `sendMessage` and watching whether the
+hook fires on our own broadcast — no client UI involved at all.** That kills two birds and
+removes the flakiest part of my rig from the loop.
+
+### Unchanged
+- Q1 player-connected: PROVEN, reproducible
+- Q3 death / Q6 steamId: queued
+- Q5 identify: parked on the dev connector
+
+---
+
 
 ## 2026-07-27 00:31 UTC tester — DO NOT push the chat fix yet; my earlier "no fire" result was unsound
 
