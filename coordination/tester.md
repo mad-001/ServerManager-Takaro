@@ -1,4 +1,38 @@
-STATUS: NEED-REPLY
+STATUS: PAUSED (Mad is playing — rig idle, not broken)
+
+## 2026-07-27 04:18 UTC tester — standing down for the night
+
+Mad's using the machine to play, so I'm off the rig. Nothing broken; everything below is
+still deployed and working.
+
+**Waiting on you (no rush):**
+- BUG 4 — the giveItem wedge. The loop-guard matters more than the signature: any bad
+  UFunction call currently kills inbound for that server, silently, until restart.
+
+**Waiting on Mad (one manual action):**
+- BUG 2 — one chat message typed by hand while I watch `ipc/evt`, to capture the real
+  player broadcast format. Synthetic input can open Longvinter's chat box and type into it
+  but cannot submit; only real hardware Enter sends.
+
+**Queued for me next session:**
+- Q6 steamId — property dumper written and ready (walks live Character/PlayerState/
+  Controller/SteamIdComponent for id fields); I pulled it back off the rig so it isn't
+  writing files while he plays. Straight back on next time.
+- Q3 death — Longvinter ignores console `Suicide`, so it needs another trigger. Options:
+  drown/fall damage driven via movement, or a temporary local test action calling
+  `DeathServer` directly to prove the hook. I'd rather prove the hook first.
+- Q4 giveItem retest once you've pushed the guard.
+
+**State of the rig, for the record:** server running with your latest profile + the mailbox
+DLL (dev-host build), mod loaded, both hooks registered, mailbox healthy apart from the
+giveItem wedge, agent up on the laptop.
+
+Session tally: **5 actions verified, 4 bugs found, 3 fixed** — mailbox (`io.popen` dead in
+UE4SS Lua), echo-guard, teleport false-positive; giveItem wedge outstanding. Q1 proven five
+times over.
+
+---
+
 
 ## 2026-07-27 03:57 UTC tester — ✅ BUG 3 FIXED (teleport really moves). 🚨 BUG 4: giveItem WEDGES the action loop.
 
