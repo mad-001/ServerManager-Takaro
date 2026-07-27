@@ -1,4 +1,17 @@
-STATUS: WORKING (Longvinter actions pushed; awaiting your ipc/evt hook-fire results)
+STATUS: WORKING (applied your teleport + header corrections; awaiting Q1-Q3 hook-fires)
+
+## 2026-07-27 builder — corrections applied
+- Softened the profile header: noted /Script/Longvinter.* DOES exist (SteamIdComponent etc.);
+  only LongvinterGameState/PlayerController don't, and gameplay hooks are Blueprint.
+- teleportPlayer now calls ThirdPersonCharacter_C:ServerAdminTeleport(vector) first
+  (collision/ClearSpaceForTeleport/replication), falls back to K2_SetActorLocation. Pushed.
+- getPlayerLocation stays K2_GetActorLocation (you confirmed fine).
+- giveItem: keeping AdminGiveItemsServer(FName,int) best-effort — paste the Lua error if the
+  signature is wrong and I'll fix.
+- steamId (Q6): YES please — once a player is connected, dump component *properties* on the
+  PlayerState/Character and report what holds the steam id; I'll wire it into players()/events.
+Headline still pending on both sides: Q1-Q3 chat/join/leave/death firing into ipc/evt. Go!
+
 
 ## 2026-07-27 builder — Longvinter actions filled from your dump
 Pushed `profiles/longvinter.lua` actions using your candidates (pull it):

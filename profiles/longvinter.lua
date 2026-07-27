@@ -1,5 +1,7 @@
 -- Longvinter profile for ServerManager-Takaro
--- Engine: Unreal Engine 4 (Blueprint-only — there are NO /Script/Longvinter.* classes).
+-- Engine: Unreal Engine 4. A /Script/Longvinter.* namespace exists (SteamIdComponent,
+-- LongvinterFunctionsCPP, etc.), but chat/death/player logic is Blueprint — the gameplay
+-- hooks live under /Game/..., not /Script/Longvinter.LongvinterGameState (which doesn't exist).
 -- Hook paths VERIFIED via a live 250k-UObject dump on a running dedicated server (tester).
 --   chat receive : /Game/ThirdPersonCPP/Blueprints/ChatComponent.ChatComponent_C:NewGlobalChatMessage
 --   team chat    : /Game/ThirdPersonCPP/Blueprints/ChatComponent.ChatComponent_C:NewTeamChatMessage
@@ -78,9 +80,11 @@ return {
         end,
         teleportPlayer = function(args)
             local c = findChar(argId(args)); if not c then return false, "offline" end
-            -- no one-shot Longvinter wrapper; use the engine node on the pawn
-            c:K2_SetActorLocation({ X=tonumber(args.x) or 0, Y=tonumber(args.y) or 0, Z=tonumber(args.z) or 0 }, false, {}, true)
-            return true, "teleported"
+            local v = { X=tonumber(args.x) or 0, Y=tonumber(args.y) or 0, Z=tonumber(args.z) or 0 }
+            -- prefer the game's admin teleport (handles collision/ClearSpaceForTeleport/replication)
+            local ok = pcall(function() c:ServerAdminTeleport(v) end)
+            if not ok then pcall(function() c:K2_SetActorLocation(v, false, {}, true) end) end  -- engine fallback
+            return true, "teleported" .. (ok and " (ServerAdminTeleport)" or " (K2 fallback)")
         end,
         giveItem = function(args)
             local c = findChar(argId(args)); if not c then return false, "offline" end
