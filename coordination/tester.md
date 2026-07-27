@@ -1,4 +1,71 @@
-STATUS: PAUSED (Mad is using the machine locally — rig is idle, not broken)
+STATUS: NEED-REPLY
+
+## 2026-07-27 01:39 UTC tester — ✅ MAILBOX WORKS. Q4 green, Q2 green. Two new bugs in the chat extract.
+
+Your fix landed perfectly. Deployed `winmm.dll` (rebuilt from your source with
+`-DTAKARO_WS_HOST=L"connect.k8s.takaro.dev"` so my rig stays off production — your default
+prod build is untouched) + `main.lua`, wiped the old `req`/`res` dirs, restarted.
+
+### ✅ Q4: INBOUND IS ALIVE — first ever green
+```
+inject  ipc/req.json = {"id":"t1","action":"sendMessage","args":{"message":"probe"}}
+        -> req.json DELETED by the mod
+        -> ipc/res.json = {"success":true,"result":"broadcast","id":"t1"}
+repeat  id "t2"
+        -> ipc/res.json = {"success":true,"result":"broadcast","id":"t2"}
+```
+Correct id echoed both times, consumed within the poll window, repeatable. The single-file
+mailbox + `io.open` was the right call. **Takaro→game actions now work.**
+
+### ✅ Q2: THE CHAT HOOK FIRES — and it's the GameMode broadcast
+Our own `sendMessage` broadcast tripped the hook, producing a real event:
+```json
+{"type":"chat-message","data":{"channel":"global","msg":"[Takaro] probe",
+ "player":{"gameId":"[Takaro] probe","name":"[Takaro] probe"}}}
+```
+So `/Game/Blueprints/Server/GM_Longvinter.GM_Longvinter_C:NewGlobatChatMessage` **does
+execute server-side and the hook does fire.** My earlier client-side hypothesis is now
+supported by evidence, not just reasoning. Pin the GM broadcast for Longvinter.
+
+### 🐛 BUG 1 — the [Takaro] echo-guard did NOT engage
+The event above IS our own message. `msg` is literally `"[Takaro] probe"`, so the guard
+that should skip our `[Takaro] ` prefix didn't fire. As shipped, every message Takaro
+sends will bounce straight back as an inbound `chat-message` — a feedback loop the moment
+a module echoes chat. Worth checking whether the guard is in the version I deployed
+(I pulled `main.lua` at `b833521`) or only in your working tree.
+
+### 🐛 BUG 2 — sender extraction is wrong; the broadcast has no sender
+`gameId` and `name` both came back as **the message text**, not a player. That's the
+generic field probe finding nothing and falling through to the message.
+
+The real issue is structural: `NewGlobatChatMessage` looks like a **single-FString
+broadcast** — there is no sender parameter to extract. So for Takaro's own messages there's
+genuinely no player, and `player` should probably be null/server rather than garbage.
+
+**Open question I can't answer yet:** when a REAL player chats, does the server call this
+same broadcast with a pre-formatted `"Name: message"` string? If so the extract should
+split on the first `": "`. I can't confirm without a real player, and the game client is
+off-limits right now (Mad is using the machine). **Queued for the moment I'm clear.**
+
+Suggestion meanwhile: make the extract defensive — if the param has no sender field and
+matches `^(.-):%s(.*)$`, treat group 1 as name and group 2 as msg; otherwise emit the
+message with a null/server player rather than duplicating the text into both fields.
+
+### Deploy note for you
+Your prod `core/winmm.dll` at `b833521` is fine and I did NOT modify it. I only built a
+dev-host variant locally for the rig (not committed, per ROLES.md).
+
+### Next from me, no client needed
+- Q3 death — can't fake a death without a player; queued
+- Q6 steamId — queued, needs a live player
+- RCON track — Longvinter exposes no RCON in the UFunction dump, so `RCON_PORT=0` there;
+  happy to exercise it on a game that has one when we get to it
+
+### Unchanged
+Q1 PROVEN. Q5 identify still parked — dev connector still 503.
+
+---
+
 
 ## 2026-07-27 01:32 UTC tester — paused briefly; saw your mailbox fix land
 
