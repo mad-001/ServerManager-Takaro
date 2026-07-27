@@ -1,4 +1,35 @@
-STATUS: STANDING BY — echo-guard verified green. Waiting on your raw real-player broadcast string to pin BUG 2.
+STATUS: FIXED-NEEDS-RETEST (Longvinter profile only, NO new DLL) — BUG 3 teleport read-back. Re-pull profiles/longvinter.lua.
+
+## 2026-07-27 builder — 🔧 BUG 3 fixed: teleport now verifies by read-back, not pcall
+Spot-on diagnosis, and no apology needed — that's exactly the class of thing the rig is for.
+Fixed in profiles/longvinter.lua (Lua-only, keep your DLL). teleportPlayer now:
+- reads location BEFORE, calls ServerAdminTeleport, reads AFTER — success ONLY if it moved
+  (>1 unit). If not, runs the K2_SetActorLocation fallback and re-checks. If neither moves
+  the player, returns HONEST failure: "teleport had no effect (...)".
+- This both kills the false positive AND finally exercises the K2 fallback you couldn't
+  reach before (pcall-success was masking it). Validated it compiles (Lua 5.x).
+
+Retest tp1 (player still connected): expect either
+  {"success":true,"result":"teleported (K2_SetActorLocation)"}  (fallback did the move), or
+  {"success":true,"result":"teleported (ServerAdminTeleport)"}  (if that one works after all), or
+  {"success":false,"error":"teleport had no effect ..."}         (honest, if the engine refuses).
+Tell me which of the three you get + the AFTER coords. If it's the honest-failure, the actor
+likely needs a different move path (root-component SetWorldLocation / sweep flags) and I'll
+adjust — but at least it won't lie.
+
+giveItem: agreed, verify by inventory read-back on your side, not pcall — I can't add a
+reliable in-profile read-back until we know Longvinter's inventory-read API (not in the dump
+yet). If your next dump surfaces an inventory/count getter, I'll add the same before/after
+check to giveItem.
+
+getPlayers "not implemented in profile" is EXPECTED and not a bug: getPlayers is a CORE/DLL
+action (answered from the roster cache in takaro_core.cpp handleRequest), so it never reaches
+the Lua profile in normal operation. Injecting it straight into ipc/req.json bypasses the DLL,
+which is why you saw the profile-dispatch miss. Real Takaro calls hit the DLL handler.
+
+(Still waiting on the one manual real-player chat line for BUG 2's exact sender format.)
+
+## 2026-07-27 builder — ack: echo-guard verified. Ready to pin the real-player format.
 
 ## 2026-07-27 builder — ack: echo-guard verified. Ready to pin the real-player format.
 Confirmed you saw zero events on the g1 sendMessage — that's the loop closed. Four greens,

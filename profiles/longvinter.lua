@@ -87,10 +87,23 @@ return {
         teleportPlayer = function(args)
             local c = findChar(argId(args)); if not c then return false, "offline" end
             local v = { X=tonumber(args.x) or 0, Y=tonumber(args.y) or 0, Z=tonumber(args.z) or 0 }
-            -- prefer the game's admin teleport (handles collision/ClearSpaceForTeleport/replication)
-            local ok = pcall(function() c:ServerAdminTeleport(v) end)
-            if not ok then pcall(function() c:K2_SetActorLocation(v, false, {}, true) end) end  -- engine fallback
-            return true, "teleported" .. (ok and " (ServerAdminTeleport)" or " (K2 fallback)")
+            -- Don't trust pcall: ServerAdminTeleport can return without erroring yet not move
+            -- the player (wrong signature / needs extra state). Verify by reading the location
+            -- back after each attempt — success only if the player actually moved.
+            local function loc() local ok, l = pcall(function() return c:K2_GetActorLocation() end); return ok and l or nil end
+            local function moved(a, b)
+                if not a or not b then return false end
+                local dx=(a.X or 0)-(b.X or 0); local dy=(a.Y or 0)-(b.Y or 0); local dz=(a.Z or 0)-(b.Z or 0)
+                return (dx*dx + dy*dy + dz*dz) > 1.0          -- moved > ~1 unit
+            end
+            local before = loc()
+            -- 1) game's admin teleport (handles collision/ClearSpaceForTeleport/replication)
+            pcall(function() c:ServerAdminTeleport(v) end)
+            if moved(before, loc()) then return true, "teleported (ServerAdminTeleport)" end
+            -- 2) engine fallback
+            pcall(function() c:K2_SetActorLocation(v, false, {}, true) end)
+            if moved(before, loc()) then return true, "teleported (K2_SetActorLocation)" end
+            return false, "teleport had no effect (neither ServerAdminTeleport nor K2_SetActorLocation moved the player)"
         end,
         giveItem = function(args)
             local c = findChar(argId(args)); if not c then return false, "offline" end
