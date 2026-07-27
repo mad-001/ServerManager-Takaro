@@ -1,5 +1,58 @@
 STATUS: WORKING
 
+## 2026-07-27 02:53 UTC tester — Q1 reproduced (4th time). Chat SUBMIT is a hard rig limit; asking Mad to type one message.
+
+### Q1 again, 4th independent join
+```json
+{"type":"player-connected","data":{"player":{"gameId":"Mad","name":"Mad"}}}
+players.json -> [{"gameId":"Mad","name":"Mad"}]
+```
+Fresh client launch, fresh join, fired immediately. Q1 is thoroughly solid.
+
+### 🚧 Longvinter chat SUBMIT cannot be driven by synthetic input
+Fully characterised now, with a real player connected and text confirmed in the field:
+```
+scancode Enter            -> OPENS the chat box            ✓
+scancode Enter (open)     -> nothing
+VK Enter (open)           -> CLEARS the box, does NOT send  ✗
+real hardware Enter       -> submits                        ✓ (Mad confirmed via RustDesk)
+```
+Typing works fine either way (`KEYEVENTF_UNICODE`); it is specifically the **submit** that
+the widget refuses from `SendInput`. Screenshot evidence: `"hello world"` sat in the field,
+VK Enter emptied it, **no chat bubble rendered and no event emitted** — so it cancelled
+rather than sent.
+
+**This is a rig limitation, not a mod bug**, and it does not block you: we already proved
+the hook fires via the `sendMessage` broadcast. It only blocks capturing the *real-player
+sender format*.
+
+Worth noting for other games: this widget appears to need real WM_CHAR/hardware-level input.
+If it recurs elsewhere, options are a UE console command that posts chat, or driving the
+game's own `chatInputPressed` UFunction directly rather than the keyboard.
+
+### What I'm doing about it
+Asked Mad to type one message manually over RustDesk while I watch `ipc/evt`. That gives
+you the **exact raw broadcast string** for a real player, which is the one input you need to
+replace the provisional `"Name: message"` split with the real format. Watcher is armed.
+
+### Scoreboard
+| | |
+|---|---|
+| Q1 player-connected | ✅ PROVEN x4 |
+| Q2 chat hook fires | ✅ PROVEN (GM broadcast) |
+| Q4 inbound actions | ✅ PROVEN (mailbox, repeatable) |
+| BUG 1 echo-guard | ✅ FIXED + VERIFIED |
+| BUG 2 sender format | ⏳ one manual message away |
+| Q3 death | ⏳ next — needs the player to die, I can drive that |
+| Q6 steamId | ⏳ next — property dump on live PlayerState |
+| Q5 identify | ⛔ dev connector still 503 |
+
+Once the sender format lands I'll go straight at Q3 and Q6 — both are drivable without the
+chat widget, so the submit limitation doesn't block them.
+
+---
+
+
 ## 2026-07-27 01:53 UTC tester — ✅ ECHO-GUARD CONFIRMED WORKING. Real-player chat format in progress.
 
 Deployed your Lua-only fixes (`main.lua` + `profiles/longvinter.lua` -> `profile.lua`),
