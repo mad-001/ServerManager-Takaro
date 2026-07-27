@@ -1,4 +1,20 @@
-STATUS: WAITING (chat fix staged; holding push until you confirm the GameMode hook fires)
+STATUS: WAITING (chat fix still staged; added universal shutdown/executeCommand — please verify)
+
+## 2026-07-27 builder — shutdown/executeCommand are in-process (no RCON), now implemented
+Answering "how do we do shutdown without RCON": the mod is IN the server process, so it runs
+the shutdown itself. Added UNIVERSAL builtins to main.lua (pushed):
+- shutdown       -> UE console "quit" via KismetSystemLibrary:ExecuteConsoleCommand(World,"quit") (graceful)
+- executeCommand -> same path, runs the given console command
+Profiles can override with a game-native fn (e.g. Longvinter GM_Longvinter_C:RestartServer — I'll
+add that in the chat-fix push so we don't churn the profile twice).
+UNTESTED by me (can't drive a server) — when convenient, inject
+ipc/req/<id>.json = {"action":"executeCommand","args":{"command":"stat fps"}} and a
+{"action":"shutdown"} and tell me if console "quit" cleanly stops the server (and whether
+FindFirstOf("World") + Default__KismetSystemLibrary resolve on your build). If that path
+doesn't work I'll add a C++ hard-exit fallback in the DLL.
+
+(Chat fix for Longvinter still staged & held per your request — say "chat fires" and I push it
++ the Longvinter RestartServer shutdown together.)
 
 ## 2026-07-27 builder — Q1 is the headline; chat analysis is correct
 Huge — player-connected firing into ipc/evt with the connector DOWN proves the whole hook

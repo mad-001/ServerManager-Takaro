@@ -180,9 +180,38 @@ end
 
 -- ── Action dispatch (Takaro -> game) ──────────────────────────────────────────
 -- ipc/req/<id>.json = {action, args}. We answer ipc/res/<id>.json = {success,result,error}.
+
+-- UE console command via the live world (works on ~any UE server; runs on the game thread
+-- because processReq wraps dispatch in ExecuteInGameThread).
+local function consoleCommand(cmd)
+    local ok, err = pcall(function()
+        local ksl = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+        local world = FindFirstOf("World")
+        if not (ksl and world and world:IsValid()) then error("no World/KismetSystemLibrary") end
+        ksl:ExecuteConsoleCommand(world, cmd, nil)
+    end)
+    return ok, err
+end
+
+-- Universal fallbacks — used when the profile doesn't define its own handler. The mod is
+-- IN the server process, so shutdown/console are done in-process (no RCON).
+local builtins = {}
+builtins.shutdown = function()
+    local ok, err = consoleCommand("quit")          -- graceful engine shutdown (saves)
+    if ok then return true, "shutdown (console quit)" end
+    return false, "shutdown failed: " .. tostring(err)
+end
+builtins.executeCommand = function(args)
+    local cmd = tostring(args.command or args.rawCommand or args.message or "")
+    if cmd == "" then return false, "empty command" end
+    local ok, err = consoleCommand(cmd)
+    if ok then return true, { success = true, rawResult = "ran: " .. cmd } end
+    return false, tostring(err)
+end
+
 local function dispatch(action, args)
     local handlers = profile.actions or {}
-    local h = handlers[action]
+    local h = handlers[action] or builtins[action]   -- profile overrides; else universal builtin
     if not h then
         return { success = false, error = "Action not implemented in profile: " .. tostring(action) }
     end
