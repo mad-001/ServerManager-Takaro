@@ -441,6 +441,17 @@ void handleRequest(const std::string& requestId, const json& payload) {
         return;
     }
 
+    // Catalog/list actions Takaro validates as ARRAYS. A generic UE server exposes no
+    // entity/item/ban/location catalog, so the correct (and Takaro-valid) answer is an
+    // empty array — NOT the {success,error} object the Lua "not implemented" path returns
+    // (that produced "Expected array … but got object"). Answered here so it never falls
+    // through to Lua. (A future game needing a real catalog would add its own core path.)
+    if (action == "listEntities" || action == "listItems" ||
+        action == "listBans"     || action == "listLocations") {
+        sendResponse(requestId, json::array());
+        return;
+    }
+
     // Takaro console -> executeConsoleCommand. If RCON is configured, run it against the
     // game's own RCON (that's where the real command surface lives); otherwise fall
     // through to the Lua UE-console path.
