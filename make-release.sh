@@ -45,19 +45,20 @@ trap 'rm -rf "$STAGE"' EXIT
 # The staging root IS the Win64 overlay: no wrapper folder, so unzipping straight
 # into ...\Binaries\Win64\ drops winmm.dll / version.dll / ue4ss\ exactly in place.
 ROOT="$STAGE/root"
-mkdir -p "$ROOT/ue4ss/Mods/TakaroConnector/Scripts" "$ROOT/ue4ss/Mods/TakaroConnector/profiles"
+mkdir -p "$ROOT/ue4ss/Mods"
 
 # 1) our proxy DLLs (Takaro core + UE4SS loader)
 cp core/winmm.dll core/version.dll "$ROOT/"
 
-# 2) bundled UE4SS runtime
-cp "$UE4SS_SRC/UE4SS.dll" "$UE4SS_SRC/UE4SS-settings.ini" "$UE4SS_SRC/MemberVariableLayout.ini" "$ROOT/ue4ss/"
-for d in BPML_GenericFunctions BPModLoaderMod Keybinds shared; do
-  [[ -d "$UE4SS_SRC/Mods/$d" ]] && cp -r "$UE4SS_SRC/Mods/$d" "$ROOT/ue4ss/Mods/"
-done
-[[ -f "$UE4SS_SRC/Mods/mods.json" ]] && cp "$UE4SS_SRC/Mods/mods.json" "$ROOT/ue4ss/Mods/"
+# 2) bundled UE4SS runtime — copy the ENTIRE pristine tree (robust to layout changes
+#    between UE4SS versions: settings, SDK backends, built-in mods, whatever ships).
+cp -r "$UE4SS_SRC/." "$ROOT/ue4ss/"
+rm -rf "$ROOT/ue4ss/Mods/TakaroConnector"        # our mod is overlaid fresh below
+UE4SS_VER="$(basename "$(ls -1 "$UE4SS_SRC"/UE4SS*.dll 2>/dev/null | head -1)")"
+echo "bundled UE4SS : $UE4SS_VER ($(du -h "$UE4SS_SRC/UE4SS.dll" | cut -f1))"
 
 # 3) our universal Lua mod
+mkdir -p "$ROOT/ue4ss/Mods/TakaroConnector/Scripts" "$ROOT/ue4ss/Mods/TakaroConnector/profiles"
 cp mod/TakaroConnector/Scripts/main.lua \
    mod/TakaroConnector/Scripts/json.lua \
    mod/TakaroConnector/Scripts/autodetect.lua \
@@ -69,13 +70,9 @@ cp mod/TakaroConnector/TakaroConfig.txt "$ROOT/ue4ss/Mods/TakaroConnector/Takaro
 printf -- '-- Default universal profile: chat/death auto-discover at runtime.\n-- For a tuned profile, copy profiles/<game>.lua over this file.\nreturn { name = "Auto-detect (universal)" }\n' \
   > "$ROOT/ue4ss/Mods/TakaroConnector/Scripts/profile.lua"
 
-# 4) mods.txt — UE4SS built-ins + our mod enabled
-cat > "$ROOT/ue4ss/Mods/mods.txt" <<'EOF'
-BPML_GenericFunctions : 1
-BPModLoaderMod : 1
-Keybinds : 0
-TakaroConnector : 1
-EOF
+# 4) mods.txt — keep UE4SS's own built-in enablement, just add our mod
+grep -q '^TakaroConnector' "$ROOT/ue4ss/Mods/mods.txt" 2>/dev/null \
+  || printf '\nTakaroConnector : 1\n' >> "$ROOT/ue4ss/Mods/mods.txt"
 
 # 5) per-game profiles (reference; tucked in the mod folder, not the Win64 root)
 cp profiles/*.lua "$ROOT/ue4ss/Mods/TakaroConnector/profiles/"
