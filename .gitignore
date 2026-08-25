@@ -4,3 +4,4 @@ core/build_warnings.txt
 *.tmp
 ipc/
 *.zip
+vendor/

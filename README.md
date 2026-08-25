@@ -77,11 +77,25 @@ See [`core/BUILD.md`](core/BUILD.md).
 
 ## Install (per game server)
 
-1. Install the game-appropriate UE4SS into `...\Binaries\Win64\`.
-2. Drop `winmm.dll` (+ the experimental UE4SS build) and `ue4ss\Mods\TakaroConnector\` in.
-3. Set `SERVER_NAME` + `REGISTRATION_TOKEN` in `TakaroConfig.txt` (Takaro → create a
-   **Generic** game server, copy its token).
-4. Enable `TakaroConnector : 1` in `ue4ss\Mods\mods.txt` and start the server.
+The release archive (`ServerManager-Takaro-vX.Y.Z.zip`) is an all-in-one drop-in — the
+UE4SS runtime is **bundled**, so there is no separate download. Its root *is* the Win64
+overlay (`winmm.dll`, `version.dll`, `ue4ss\`).
+
+1. Find the server's Win64 folder (the one with the dedicated-server `.exe`):
+   `<game-server>\<ProjectName>\Binaries\Win64\`.
+2. **Extract the zip straight into that folder** (Extract Here / merge if prompted).
+3. Set `SERVER_NAME` + `REGISTRATION_TOKEN` in
+   `ue4ss\Mods\TakaroConnector\TakaroConfig.txt` (Takaro → create a **Generic** game
+   server, copy its token).
+4. *(optional, per game)* copy `ue4ss\Mods\TakaroConnector\profiles\<game>.lua` over
+   `ue4ss\Mods\TakaroConnector\Scripts\profile.lua`. The default auto-detects at runtime.
+5. Start the server. It connects to Takaro itself — no bridge, no Node.
+
+### Cut a release
+
+Bump [`VERSION`](VERSION), then `./make-release.sh` → `ServerManager-Takaro-v<VERSION>.zip`
+(current DLLs + bundled UE4SS + mod + all profiles). The UE4SS runtime is taken from
+`vendor/ue4ss/` (kept out of git); override with `UE4SS_SRC=/path ./make-release.sh`.
 
 ## Add a new game
 
