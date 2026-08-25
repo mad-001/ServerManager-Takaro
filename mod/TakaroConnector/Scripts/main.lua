@@ -78,6 +78,17 @@ do
     else log("No profile.lua loaded (" .. tostring(p) .. ") — relying on auto-detect") end
 end
 TC.profile = profile
+-- Per-game namespace for any synthesized platform id (Takaro platformId = "platform:id").
+-- Prefer an explicit profile.platform slug, else the game name; never a generic "unreal".
+local function slugify(s)
+    s = tostring(s or ""):lower():gsub("[^%w]+", "-"):gsub("^%-+", ""):gsub("%-+$", "")
+    return (s ~= "" and s) or nil
+end
+TC.gameSlug = slugify(profile.platform)
+if not TC.gameSlug and profile.name and not profile.name:lower():find("auto%-?detect") then
+    TC.gameSlug = slugify(profile.name)
+end
+TC.gameSlug = TC.gameSlug or "game"
 local autodetect = require("autodetect")
 
 -- ── Player roster + join/leave/death diffing ──────────────────────────────────
@@ -91,29 +102,62 @@ local function getRoster()
     return list
 end
 
+-- Takaro requires at least one platform identifier (steamId / epicOnlineServicesId /
+-- xboxLiveId / platformId) to CREATE a player. Without one, join/leave/chat/death events
+-- pass the connector's DTO validation but are DROPPED in the player-sync worker (so they
+-- silently never appear — no error comes back to the mod). Guarantee one on every player:
+-- prefer a real steam/epic id, else synthesize a stable "unreal:<gameId>" (valid per
+-- Takaro's platformId regex) so events always resolve to a player.
+local function sanitizeId(s) return (tostring(s or ""):gsub("[^%w_%-]", "_")) end
+local function platformIdFor(p)
+    if p.platformId and p.platformId ~= "" then return p.platformId end
+    if p.steamId and p.steamId ~= "" then return "steam:" .. p.steamId end
+    if p.epicOnlineServicesId and p.epicOnlineServicesId ~= "" then return "epic:" .. p.epicOnlineServicesId end
+    local gid = sanitizeId(p.gameId); if gid == "" then gid = "unknown" end
+    return (TC.gameSlug or "game") .. ":" .. gid
+end
+-- Canonical IGamePlayer for events + roster. ONLY DTO-whitelisted fields (no deaths etc.,
+-- or the connector's forbidNonWhitelisted validation would reject the event).
+function TC.playerObj(p)
+    local o = { gameId = tostring(p.gameId or ""), name = p.name or "", platformId = platformIdFor(p) }
+    if p.steamId and p.steamId ~= "" then o.steamId = p.steamId end
+    if p.epicOnlineServicesId and p.epicOnlineServicesId ~= "" then o.epicOnlineServicesId = p.epicOnlineServicesId end
+    return o
+end
+
 local function publishRosterAndDiff()
-    local list = getRoster()
+    -- Roster diff for join/leave/death; also publishes players.json for the DLL's getPlayers.
+    local raw = getRoster()
+    local list, deathsById = {}, {}
+    for _, p in ipairs(raw) do
+        if p.gameId then
+            local o = TC.playerObj(p)
+            list[#list + 1] = o
+            deathsById[o.gameId] = p.deaths
+        end
+    end
     -- publish for the DLL's getPlayers (force [] for an empty roster — an empty Lua
     -- table would encode as {} and the DLL only accepts a JSON array)
     writeAtomic(TC.PLAYERS, (#list == 0) and "[]" or json.encode(list))
     -- diff for join / leave / death
     local current = {}
     for _, p in ipairs(list) do
-        if p.gameId then
-            local id = tostring(p.gameId)
-            current[id] = true
-            local prev = TC.known[id]
-            if not prev then
-                TC.emit("player-connected", { player = { gameId = id, name = p.name, steamId = p.steamId } })
-            elseif p.deaths and prev.deaths and tonumber(p.deaths) > tonumber(prev.deaths) then
-                TC.emit("player-death", { player = { gameId = id, name = p.name, steamId = p.steamId } })
-            end
-            TC.known[id] = { name = p.name, steamId = p.steamId, deaths = p.deaths or (prev and prev.deaths) or 0 }
+        local id = p.gameId
+        current[id] = true
+        local prev = TC.known[id]
+        local d = deathsById[id]
+        if not prev then
+            TC.emit("player-connected", { player = p })
+        elseif d and prev.deaths and tonumber(d) > tonumber(prev.deaths) then
+            TC.emit("player-death", { player = p })
         end
+        TC.known[id] = { name = p.name, platformId = p.platformId, steamId = p.steamId,
+                         epicOnlineServicesId = p.epicOnlineServicesId, deaths = d or (prev and prev.deaths) or 0 }
     end
     for id, prev in pairs(TC.known) do
         if not current[id] then
-            TC.emit("player-disconnected", { player = { gameId = id, name = prev.name, steamId = prev.steamId } })
+            TC.emit("player-disconnected", { player = { gameId = id, name = prev.name,
+                platformId = prev.platformId, steamId = prev.steamId, epicOnlineServicesId = prev.epicOnlineServicesId } })
             TC.known[id] = nil
         end
     end
@@ -183,8 +227,14 @@ local function installChat()
                 -- A single-FString server broadcast has no sender; emit an empty player
                 -- rather than duplicating the message text into name/gameId.
                 local gid = spec.gameId and spec.gameId(self,a,b,c) or name
+                -- player is optional on chat-message; only include one when we have a
+                -- sender, and give it a valid platform id so it resolves.
+                local pl = nil
+                if (name and name ~= "") or (gid and gid ~= "") then
+                    pl = TC.playerObj({ gameId = gid or name, name = name })
+                end
                 TC.emit("chat-message", {
-                    player  = { name = name or "", gameId = gid or "" },
+                    player  = pl,
                     msg     = msg,
                     channel = channel or "global",
                 })
@@ -206,7 +256,7 @@ local function installDeath()
             local sok, serr = pcall(function()
                 local name, gameId, steamId = spec.extract(self, a, b, c)
                 if not name and not gameId then return end
-                TC.emit("player-death", { player = { name = name or "", gameId = tostring(gameId or name or ""), steamId = steamId } })
+                TC.emit("player-death", { player = TC.playerObj({ gameId = gameId or name, name = name, steamId = steamId }) })
             end)
             if not sok then log("death hook error: " .. tostring(serr)) end
         end)

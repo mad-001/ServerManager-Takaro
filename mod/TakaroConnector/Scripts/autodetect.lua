@@ -144,6 +144,38 @@ function M.death()
     return nil
 end
 
+-- Resolve a player's REAL platform id string. Native FUniqueNetIdRepl:ToString() is NOT
+-- callable through UE4SS (it errors), so we use reflected UFunctions (verified in the game's
+-- object dump), all pcall-guarded with known signatures (no wrong-arg hang):
+--   1) PlayerState:BP_GetUniqueId()  — engine-standard on EVERY UE game -> FUniqueNetIdRepl
+--   2) stringify with the first converter present on this game:
+--        OnlineSubsystemBlueprints OnlineHelpers:Conv_FUniqueNetIdReplToString  (common
+--        online plugin; call it on the Default__OnlineHelpers CDO), else native ToString.
+-- Returns the id string (steamId / EOS ProductUserId / other), or nil so the caller uses a
+-- name-namespaced fallback (events still work everywhere).
+function M.netIdString(ps)
+    if M._ohChecked == nil then
+        M._ohChecked = true
+        pcall(function() M._oh = StaticFindObject("/Script/OnlineSubsystemBlueprints.Default__OnlineHelpers") end)
+    end
+    local function clean(s)
+        if type(s) == "userdata" then local r; pcall(function() r = s:ToString() end); s = r end
+        if type(s) ~= "string" or s == "" or s == "INVALID" or s == "NULL" then return nil end
+        return s
+    end
+    if M._oh ~= nil then
+        -- BEST: convert the LIVE net id userdata (ps.UniqueId). The table copy returned by
+        -- BP_GetUniqueId() loses the underlying id ptr, so Conv on it comes back empty.
+        local s; pcall(function() s = M._oh:Conv_FUniqueNetIdReplToString(ps.UniqueId) end)
+        s = clean(s); if s then return s end
+        -- fallback: the BP_GetUniqueId() struct copy
+        local netId; pcall(function() netId = ps:BP_GetUniqueId() end)
+        if netId ~= nil then local s2; pcall(function() s2 = M._oh:Conv_FUniqueNetIdReplToString(netId) end); s2 = clean(s2); if s2 then return s2 end end
+    end
+    -- last: native ToString (works on some games/UE4SS builds)
+    local s3; pcall(function() s3 = ps.UniqueId:ToString() end); return clean(s3)
+end
+
 -- UNIVERSAL roster — works on almost any Unreal game with no profile.
 -- APlayerState::PlayerNamePrivate is engine-standard, and UE4SS FindAllOf matches
 -- subclasses, so FindAllOf("PlayerState") enumerates every game's players. Used by
@@ -160,10 +192,20 @@ function M.players()
                 pcall(function() n = ps:GetPlayerName():ToString() end)
             end
             if n and n ~= "" then
-                -- try a stable unique net id for gameId/steamId; fall back to the name
-                local uid
-                pcall(function() uid = ps.UniqueId:ToString() end)
-                out[#out + 1] = { gameId = uid or n, name = n, steamId = (uid and uid:match("(%d%d%d%d%d+)")) }
+                -- gameId stays the name so the profile's action routing (findChar by
+                -- PlayerNamePrivate) keeps working; the real steam/EOS id rides along as the
+                -- platform identity Takaro links the global player to.
+                local entry = { gameId = n, name = n }
+                local idstr = M.netIdString(ps)
+                if idstr then
+                    local c = idstr:gsub("^EOS:", ""):match("^[^|]+") or idstr
+                    if c:match("^7656119%d%d%d%d%d%d%d%d%d%d$") or c:match("^%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d?$") then
+                        entry.steamId = c
+                    elseif c:match("^%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x$") then
+                        entry.epicOnlineServicesId = c:lower()
+                    end
+                end
+                out[#out + 1] = entry
             end
         end
     end
