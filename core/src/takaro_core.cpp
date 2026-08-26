@@ -92,7 +92,7 @@ std::mutex g_cacheMutex;
 std::mutex g_actionMutex;  // serializes gameAction (one mailbox request at a time)
 std::atomic<unsigned long long> g_reqSeq{1};
 
-struct PlayerInfo { std::string gameId, name, steamId, platformId; };
+struct PlayerInfo { std::string gameId, name, steamId, platformId, epicOnlineServicesId; };
 std::map<std::string, PlayerInfo> g_players;   // by gameId
 
 const uint64_t STEAM64_BASE = 76561197960265728ULL;
@@ -428,8 +428,9 @@ void handleRequest(const std::string& requestId, const json& payload) {
         for (auto& kv : g_players) {
             const PlayerInfo& p = kv.second;
             json e{{"gameId",p.gameId},{"name",p.name}};
-            if (!p.steamId.empty())    e["steamId"]    = p.steamId;
-            if (!p.platformId.empty()) e["platformId"] = p.platformId;
+            if (!p.steamId.empty())              e["steamId"]              = p.steamId;
+            if (!p.epicOnlineServicesId.empty()) e["epicOnlineServicesId"] = p.epicOnlineServicesId;
+            if (!p.platformId.empty())           e["platformId"]           = p.platformId;
             list.push_back(e);
         }
         sendResponse(requestId, list);
@@ -449,6 +450,16 @@ void handleRequest(const std::string& requestId, const json& payload) {
     if (action == "listEntities" || action == "listItems" ||
         action == "listBans"     || action == "listLocations") {
         sendResponse(requestId, json::array());
+        return;
+    }
+    // Per-player sync polls. Takaro validates getPlayerInventory as an ARRAY of items and
+    // getPlayerLocation as an object with numeric x/y/z. A generic UE server exposes neither,
+    // so the correct schema-valid "no data" answer is an empty array / origin position —
+    // NOT the {success,error} object the Lua "not implemented" path returns (that produced
+    // the repeating "Expected array … but got object" / "IPosition x isNumber" errors).
+    if (action == "getPlayerInventory") { sendResponse(requestId, json::array()); return; }
+    if (action == "getPlayerLocation") {
+        sendResponse(requestId, json{{"x",0},{"y",0},{"z",0}});
         return;
     }
 
@@ -493,10 +504,11 @@ void refreshPlayers() {
     for (auto& p : arr) {
         if (!p.is_object()) continue;
         PlayerInfo pi;
-        pi.gameId     = p.value("gameId", "");
-        pi.name       = p.value("name", "");
-        pi.steamId    = toSteamId64(p.value("steamId", ""));
-        pi.platformId = p.value("platformId", "");
+        pi.gameId               = p.value("gameId", "");
+        pi.name                 = p.value("name", "");
+        pi.steamId              = toSteamId64(p.value("steamId", ""));
+        pi.epicOnlineServicesId = p.value("epicOnlineServicesId", "");
+        pi.platformId           = p.value("platformId", "");
         if (pi.platformId.empty() && !pi.steamId.empty()) pi.platformId = "steam:" + pi.steamId;
         if (!pi.gameId.empty()) g_players[pi.gameId] = pi;
     }

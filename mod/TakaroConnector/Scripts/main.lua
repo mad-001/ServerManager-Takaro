@@ -119,9 +119,15 @@ end
 -- Canonical IGamePlayer for events + roster. ONLY DTO-whitelisted fields (no deaths etc.,
 -- or the connector's forbidNonWhitelisted validation would reject the event).
 function TC.playerObj(p)
-    local o = { gameId = tostring(p.gameId or ""), name = p.name or "", platformId = platformIdFor(p) }
+    local o = { gameId = tostring(p.gameId or ""), name = p.name or "" }
     if p.steamId and p.steamId ~= "" then o.steamId = p.steamId end
     if p.epicOnlineServicesId and p.epicOnlineServicesId ~= "" then o.epicOnlineServicesId = p.epicOnlineServicesId end
+    if p.xboxLiveId and p.xboxLiveId ~= "" then o.xboxLiveId = p.xboxLiveId end
+    -- 7d2d-style: prefer the typed id fields. Only synthesize a platformId when there is NO
+    -- real typed id (so events still resolve on games where no steam/EOS id is readable).
+    if not o.steamId and not o.epicOnlineServicesId and not o.xboxLiveId then
+        o.platformId = (p.platformId and p.platformId ~= "" and p.platformId) or platformIdFor(p)
+    end
     return o
 end
 

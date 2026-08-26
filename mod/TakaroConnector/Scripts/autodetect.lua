@@ -192,19 +192,21 @@ function M.players()
                 pcall(function() n = ps:GetPlayerName():ToString() end)
             end
             if n and n ~= "" then
-                -- gameId stays the name so the profile's action routing (findChar by
-                -- PlayerNamePrivate) keeps working; the real steam/EOS id rides along as the
-                -- platform identity Takaro links the global player to.
-                local entry = { gameId = n, name = n }
+                -- 7d2d-style format: gameId IS the platform id (steam/EOS), with the typed
+                -- field also set. Name is only a last-resort gameId when no id is readable.
+                local entry = { name = n }
                 local idstr = M.netIdString(ps)
                 if idstr then
-                    local c = idstr:gsub("^EOS:", ""):match("^[^|]+") or idstr
+                    local c = idstr:gsub("^EOS_", ""):gsub("^EOS:", ""):gsub("^Steam_", ""):match("^[^|]+") or idstr
                     if c:match("^7656119%d%d%d%d%d%d%d%d%d%d$") or c:match("^%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d?$") then
-                        entry.steamId = c
+                        entry.steamId = c; entry.gameId = c
                     elseif c:match("^%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x$") then
-                        entry.epicOnlineServicesId = c:lower()
+                        entry.epicOnlineServicesId = c:lower(); entry.gameId = c:lower()
+                    else
+                        entry.gameId = c
                     end
                 end
+                if not entry.gameId or entry.gameId == "" then entry.gameId = n end
                 out[#out + 1] = entry
             end
         end
