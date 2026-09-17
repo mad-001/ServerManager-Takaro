@@ -37,7 +37,15 @@
             min-height: 100vh; color: var(--text); line-height: 1.7;
             padding: 24px 16px 64px;
         }
-        .wrap { max-width: 860px; margin: 0 auto; }
+        .wrap { max-width: 1120px; margin: 0 auto; }
+        .layout { display: grid; grid-template-columns: 220px 1fr; gap: 28px; align-items: start; margin-top: 32px; }
+        /* Contents sidebar */
+        .toc { position: sticky; top: 24px; background: rgba(20,28,38,0.85); border: 1px solid var(--line);
+            border-radius: 12px; padding: 18px 16px; }
+        .toc h3 { color: var(--cyan-soft); font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.09em; margin-bottom: 12px; }
+        .toc a { display: block; color: var(--muted); padding: 7px 10px; border-radius: 7px; font-size: 0.92em; text-decoration: none; }
+        .toc a:hover { color: var(--cyan-soft); background: rgba(56,189,248,0.08); text-decoration: none; }
+        .content { min-width: 0; }
 
         /* Hero */
         .hero {
@@ -100,6 +108,10 @@
         footer { text-align: center; color: var(--muted); font-size: 0.9em; padding-top: 28px;
             border-top: 1px solid rgba(56,189,248,0.12); }
 
+        @media (max-width: 860px) {
+            .layout { grid-template-columns: 1fr; }
+            .toc { position: static; }
+        }
         @media (max-width: 640px) {
             .feature-grid { grid-template-columns: 1fr; }
             .hero { padding: 40px 22px 36px; }
@@ -112,12 +124,24 @@
 
     <header class="hero">
         <h1>Unreal Engine Server Manager</h1>
-        <p class="subtitle">Connect <strong>any</strong> Unreal Engine dedicated server to <a href="https://takaro.io/pricing/?via=zach550">Takaro</a> — player join/leave, chat, deaths, and full admin control — with a single self-contained <code>winmm.dll</code>. No bridge process. No Node.js. No client mod.</p>
+        <p class="subtitle">Connect <strong>any</strong> Unreal Engine dedicated server to <a href="https://takaro.io/pricing/?via=zach550">Takaro</a> — player join/leave, chat, deaths, and full admin control.</p>
         <div class="cta">
             <a href="https://github.com/mad-001/ServerManager-Takaro/releases/latest" class="btn">Download Latest Release</a>
             <a href="https://takaro.io/pricing/?via=zach550" class="btn btn-secondary">Sign Up for Takaro (Free)</a>
         </div>
     </header>
+
+    <div class="layout">
+    <nav class="toc">
+        <h3>Contents</h3>
+        <a href="#overview">Overview</a>
+        <a href="#supported">Supported Games</a>
+        <a href="#install">Install</a>
+        <a href="#config">Configure</a>
+        <a href="#verify">Start &amp; Verify</a>
+        <a href="#actions">Actions</a>
+    </nav>
+    <main class="content">
 
     <section id="overview">
         <h2>Overview</h2>
@@ -183,6 +207,9 @@ ENABLED=true</code></pre>
             <tr><td><code>executeCommand</code></td><td>Dispatch a console command.</td></tr>
         </table>
     </section>
+
+    </main>
+    </div>
 
     <footer>
         <a href="https://github.com/mad-001/ServerManager-Takaro">GitHub</a> ·
