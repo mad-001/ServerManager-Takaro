@@ -53,9 +53,18 @@ static void LoadUE4SS() {
 extern "C" void StartTakaroCore();
 
 // ─── Launcher (runs on a thread, safe outside DllMain) ────────────────────────
-static DWORD WINAPI LaunchThread(LPVOID) {
+// Load UE4SS on its OWN thread, and start the Takaro core FIRST. Some games' loaders
+// deadlock inside the UE4SS LoadLibrary (loader-lock hang seen on Ultimate Arena FPS);
+// if that ran before the core on this thread it would block identify entirely. The core
+// never depends on UE4SS having loaded, so it must not be gated behind it.
+static DWORD WINAPI Ue4ssThread(LPVOID) {
     LoadUE4SS();         // make sure the Lua runtime + profile get loaded
-    StartTakaroCore();   // reads config, opens WS + file-IPC worker threads, returns
+    return 0;
+}
+static DWORD WINAPI LaunchThread(LPVOID) {
+    StartTakaroCore();   // reads config, opens WS + file-IPC worker threads, returns fast
+    HANDLE t = CreateThread(NULL, 0, Ue4ssThread, NULL, 0, NULL);  // UE4SS load can't block the core
+    if (t) CloseHandle(t);
     return 0;
 }
 

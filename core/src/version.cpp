@@ -28,7 +28,15 @@ static void LoadUE4SS() {
     }
 }
 extern "C" void StartTakaroCore();
-static DWORD WINAPI LaunchThread(LPVOID) { LoadUE4SS(); StartTakaroCore(); return 0; }
+// Start the Takaro core FIRST; load UE4SS on its own thread so a game whose loader
+// deadlocks inside the UE4SS LoadLibrary (seen on Ultimate Arena FPS) can't block identify.
+static DWORD WINAPI Ue4ssThread(LPVOID) { LoadUE4SS(); return 0; }
+static DWORD WINAPI LaunchThread(LPVOID) {
+    StartTakaroCore();
+    HANDLE t = CreateThread(NULL, 0, Ue4ssThread, NULL, 0, NULL);
+    if (t) CloseHandle(t);
+    return 0;
+}
 
 BOOL APIENTRY DllMain(HMODULE, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
