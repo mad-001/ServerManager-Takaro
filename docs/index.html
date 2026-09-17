@@ -136,7 +136,8 @@
         <h3>Contents</h3>
         <a href="#overview">Overview</a>
         <a href="#supported">Supported Games</a>
-        <a href="#install">Install</a>
+        <a href="#install">Install — Windows</a>
+        <a href="#install-linux">Install — Linux</a>
         <a href="#config">Configure</a>
         <a href="#verify">Start &amp; Verify</a>
         <a href="#actions">Actions</a>
@@ -161,10 +162,10 @@
     </section>
 
     <section id="install">
-        <h2>Install</h2>
+        <h2>Install — Windows server</h2>
         <p><strong>UE4SS is bundled</strong> — there is nothing else to download or install. Just unzip the release into your server's <code>Win64</code> folder.</p>
         <ol>
-            <li>Download the latest release ZIP and extract it into your server's <code>...\Binaries\Win64\</code> folder. The ZIP root <em>is</em> the <code>Win64</code> overlay, so everything lands in place:
+            <li>Download the latest release ZIP (<code>ServerManager-Takaro-vX.Y.Z.zip</code>) and extract it into your server's <code>...\Binaries\Win64\</code> folder. The ZIP root <em>is</em> the <code>Win64</code> overlay, so everything lands in place:
                 <pre><code>Win64\winmm.dll                                             (the connector — self-contained)
 Win64\ue4ss\...                                             (UE4SS runtime — bundled, preconfigured)
 Win64\ue4ss\Mods\TakaroConnector\TakaroConfig.txt           (edit this)
@@ -172,6 +173,16 @@ Win64\ue4ss\Mods\TakaroConnector\Scripts\                   (universal core + yo
             </li>
             <li>For a tuned game profile, copy the matching <code>profiles/&lt;game&gt;.lua</code> over <code>Scripts\profile.lua</code>. Optional — auto-detect handles join/leave/death and best-effort chat without one.</li>
         </ol>
+
+        <h2 id="install-linux">Install — Linux server (native)</h2>
+        <p>Runs on a <strong>native-Linux</strong> Unreal dedicated server too — no Wine, no Proton. The Lua connector is <em>identical</em>; only the in-process core differs, because UE4SS and <code>winmm.dll</code> are Windows-only. On Linux the core ships as <code>libtakarocore.so</code> (a release asset) and rides in the game process via <code>LD_PRELOAD</code>, holding the same secure WebSocket to Takaro.</p>
+        <ol>
+            <li>Install <a href="https://github.com/UE4SS-RE/RE-UE4SS">UE4SS for Linux</a> (a native <code>LD_PRELOAD</code> build — e.g. the community RE-UE4SS-Linux port) into your server's Linux <code>Binaries</code> folder. Its Lua-mod system is what runs the connector.</li>
+            <li>Drop the connector's <code>Scripts\</code> (the same <code>main.lua</code> / profile) into <code>ue4ss/Mods/TakaroConnector/</code>, exactly as on Windows.</li>
+            <li>Put <code>libtakarocore.so</code> (from the release assets) beside the server binary and add it to <code>LD_PRELOAD</code> alongside the UE4SS-Linux loader in your start command.</li>
+            <li>Create the same <code>TakaroConfig.txt</code> (see Configure below).</li>
+        </ol>
+        <div class="note-box">Any Unreal game that has a native-Linux dedicated server and a working UE4SS-Linux build is supported this way. Bleeding-edge engines (UE 5.5 / 5.6) need a matching UE4SS build plus that game's signature config — same requirement as on Windows.</div>
     </section>
 
     <section id="config">
