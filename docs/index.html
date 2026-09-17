@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Unreal Engine Server Manager - Takaro</title>
-    <meta name="description" content="Connect any Unreal Engine dedicated server to Takaro with one self-contained winmm.dll — player events, chat, deaths, and admin control. No bridge process, no Node.js. UE4SS-based, works across Palworld, Soulmask, ARK, Myth of Empires and more.">
+    <meta name="description" content="Connect any Unreal Engine dedicated server to Takaro with one self-contained winmm.dll — player events, chat, deaths, and admin control. Self-contained and UE4SS-based, works across Palworld, Soulmask, ARK, Myth of Empires and more.">
     <meta name="keywords" content="Takaro, Unreal Engine server manager, UE4SS, winmm.dll, Palworld Takaro, Soulmask Takaro, dedicated server, game server manager, server-manager, unreal-engine">
     <meta name="author" content="mad-001">
     <link rel="canonical" href="https://mad-001.github.io/ServerManager-Takaro/">
     <meta property="og:type" content="website">
     <meta property="og:title" content="Unreal Engine Server Manager - Takaro">
-    <meta property="og:description" content="One self-contained winmm.dll connects any Unreal Engine dedicated server to Takaro. No bridge, no Node.js.">
+    <meta property="og:description" content="One self-contained winmm.dll connects any Unreal Engine dedicated server to Takaro.">
     <meta property="og:url" content="https://mad-001.github.io/ServerManager-Takaro/">
     <meta name="twitter:card" content="summary_large_image">
     <script type="application/ld+json">
@@ -150,8 +150,8 @@
         <div class="feature-grid">
             <div class="feature-card"><strong>Player Events</strong><span>Join, leave, chat, and death tracked in Takaro in real time.</span></div>
             <div class="feature-card"><strong>Admin Actions</strong><span>Broadcast, give items, teleport, kick/ban, read inventory &amp; location.</span></div>
-            <div class="feature-card"><strong>One DLL does it all</strong><span>No separate bridge, no runtime. The DLL holds the WebSocket in-process.</span></div>
-            <div class="feature-card"><strong>Any UE game</strong><span>New games onboard with a small Lua profile — no new code.</span></div>
+            <div class="feature-card"><strong>One DLL does it all</strong><span>The whole connector lives in a single DLL that holds the WebSocket in-process.</span></div>
+            <div class="feature-card"><strong>Any UE game</strong><span>New games onboard with a small Lua profile.</span></div>
         </div>
     </section>
 
@@ -175,7 +175,7 @@ Win64\ue4ss\Mods\TakaroConnector\Scripts\                   (universal core + yo
         </ol>
 
         <h2 id="install-linux">Install — Linux server (native)</h2>
-        <p>Runs on a <strong>native-Linux</strong> Unreal dedicated server too — no Wine, no Proton. The Lua connector is <em>identical</em>; only the in-process core differs, because UE4SS and <code>winmm.dll</code> are Windows-only. On Linux the core ships as <code>libtakarocore.so</code> (a release asset) and rides in the game process via <code>LD_PRELOAD</code>, holding the same secure WebSocket to Takaro.</p>
+        <p>Runs natively on a <strong>native-Linux</strong> Unreal dedicated server too. The Lua connector is <em>identical</em>; on Linux the core ships as <code>libtakarocore.so</code> (a release asset) and rides in the game process via <code>LD_PRELOAD</code>, holding the same secure WebSocket to Takaro.</p>
         <ol>
             <li>Install <a href="https://github.com/UE4SS-RE/RE-UE4SS">UE4SS for Linux</a> (a native <code>LD_PRELOAD</code> build — e.g. the community RE-UE4SS-Linux port) into your server's Linux <code>Binaries</code> folder. Its Lua-mod system is what runs the connector.</li>
             <li>Drop the connector's <code>Scripts\</code> (the same <code>main.lua</code> / profile) into <code>ue4ss/Mods/TakaroConnector/</code>, exactly as on Windows.</li>
