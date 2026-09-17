@@ -185,7 +185,15 @@ function M.players()
     local ok, list = pcall(function() return FindAllOf("PlayerState") end)
     if not ok or not list then return out end
     for _, ps in ipairs(list) do
+        -- Unreal keeps a disconnected player's PlayerState alive for
+        -- InactivePlayerStateLifeSpan (300s default), so FindAllOf still returns them long
+        -- after they quit. Skip inactive/spectator states, else getPlayers over-reports and
+        -- player-disconnected fires up to five minutes late.
+        local inactive = false
         if ps and ps:IsValid() then
+            pcall(function() inactive = (ps.bIsInactive == true) or (ps.bOnlySpectator == true) end)
+        end
+        if ps and ps:IsValid() and not inactive then
             local n
             local o1 = pcall(function() n = ps.PlayerNamePrivate:ToString() end)
             if (not o1 or not n or n == "") then

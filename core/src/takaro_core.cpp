@@ -410,8 +410,19 @@ bool isCoreAction(const std::string& a) {
     return a == "testReachability" || a == "getPlayers" || a == "getServerInfo";
 }
 
+// Null-safe string read. Takaro modules routinely send explicit JSON null for optional args
+// (e.g. {"gameId": null}); nlohmann's value(key, default) THROWS on a present-but-null key,
+// and that throw is swallowed upstream so no response is ever sent and Takaro waits out the
+// full timeout. jstr() treats null/missing/non-string all as the default.
+static std::string jstr(const json& j, const char* key, const std::string& def = "") {
+    if (!j.is_object()) return def;
+    auto it = j.find(key);
+    if (it == j.end() || !it->is_string()) return def;
+    return it->get<std::string>();
+}
+
 void handleRequest(const std::string& requestId, const json& payload) {
-    std::string action = payload.value("action", "");
+    std::string action = jstr(payload, "action");
     json args = json::object();
     if (payload.contains("args")) {
         const json& ra = payload["args"];
@@ -436,6 +447,22 @@ void handleRequest(const std::string& requestId, const json& payload) {
         sendResponse(requestId, list);
         return;
     }
+    if (action == "getPlayer") {
+        // Single player by game id, answered from the same roster cache as getPlayers
+        // (Takaro's Generic connector otherwise gets "Action not implemented in profile").
+        std::string gid = jstr(args, "gameId");
+        if (gid.empty() && args.contains("player")) gid = jstr(args["player"], "gameId");
+        std::lock_guard<std::mutex> lk(g_cacheMutex);
+        auto it = g_players.find(gid);
+        if (it == g_players.end()) { sendResponse(requestId, json{{"success",false},{"error","player not found"}}); return; }
+        const PlayerInfo& p = it->second;
+        json e{{"gameId",p.gameId},{"name",p.name}};
+        if (!p.steamId.empty())              e["steamId"]              = p.steamId;
+        if (!p.epicOnlineServicesId.empty()) e["epicOnlineServicesId"] = p.epicOnlineServicesId;
+        if (!p.platformId.empty())           e["platformId"]           = p.platformId;
+        sendResponse(requestId, e);
+        return;
+    }
     if (action == "getServerInfo") {
         sendResponse(requestId, json{{"name", IDENTITY_TOKEN.empty() ? "Unreal Server" : IDENTITY_TOKEN},
                                      {"version","unknown"}});
@@ -452,23 +479,12 @@ void handleRequest(const std::string& requestId, const json& payload) {
         sendResponse(requestId, json::array());
         return;
     }
-    // Per-player sync polls. Takaro validates getPlayerInventory as an ARRAY of items and
-    // getPlayerLocation as an object with numeric x/y/z. A generic UE server exposes neither,
-    // so the correct schema-valid "no data" answer is an empty array / origin position —
-    // NOT the {success,error} object the Lua "not implemented" path returns (that produced
-    // the repeating "Expected array … but got object" / "IPosition x isNumber" errors).
-    if (action == "getPlayerInventory") { sendResponse(requestId, json::array()); return; }
-    if (action == "getPlayerLocation") {
-        sendResponse(requestId, json{{"x",0},{"y",0},{"z",0}});
-        return;
-    }
-
     // Takaro console -> executeConsoleCommand. If RCON is configured, run it against the
     // game's own RCON (that's where the real command surface lives); otherwise fall
     // through to the Lua UE-console path.
     if (action == "executeConsoleCommand" && RCON_PORT > 0) {
-        std::string cmd = args.value("command", "");
-        if (cmd.empty()) cmd = args.value("rawCommand", "");
+        std::string cmd = jstr(args, "command");
+        if (cmd.empty()) cmd = jstr(args, "rawCommand");
         std::string out; bool ok = rconExec(cmd, out);
         sendResponse(requestId, json{{"success", ok}, {"rawResult", out}});
         return;
@@ -483,13 +499,20 @@ void handleRequest(const std::string& requestId, const json& payload) {
 
     // Forward every other action to the Lua profile over file IPC.
     json res = gameAction(action, args);
-    if (res.is_object()) {
-        // Lua returns {success, result?, error?}. Prefer an explicit result payload.
-        if (res.contains("result") && !res["result"].is_null()) { sendResponse(requestId, res["result"]); return; }
-        sendResponse(requestId, res);
-    } else {
-        sendResponse(requestId, json{{"success",false},{"error","No result from game (timeout or action unsupported)"}});
-    }
+    bool handled = res.is_object() && res.contains("result") && !res["result"].is_null();
+    // Lua returns {success, result?, error?}. Prefer an explicit result payload — this is
+    // where a profile's real getPlayerLocation/getPlayerInventory/giveItem/etc. is answered.
+    if (handled) { sendResponse(requestId, res["result"]); return; }
+
+    // Profile has NO handler for this action. getPlayerInventory is polled every sync cycle
+    // and Takaro validates it as an ARRAY, so answer the schema-valid empty inventory (keeps
+    // the sync clean). For anything else — including getPlayerLocation — return an honest
+    // error rather than fabricated data (do NOT report every player at 0,0,0, which corrupts
+    // player tracking / teleport). This only runs when the active profile lacks the handler,
+    // so profile handlers are never shadowed.
+    if (action == "getPlayerInventory") { sendResponse(requestId, json::array()); return; }
+    if (res.is_object()) { sendResponse(requestId, res); return; }
+    sendResponse(requestId, json{{"success",false},{"error","No result from game (timeout or action unsupported)"}});
 }
 
 // ─── Poll loop (drain events + refresh roster) ────────────────────────────────────
@@ -630,10 +653,17 @@ void wsLoop() {
 
 void coreBoot() {
     // Single-instance guard: if the game imports more than one of our proxy DLLs
-    // (winmm / version / xinput), only the first to boot starts the core.
+    // (winmm / version / xinput) they load into the SAME process and would each boot the
+    // core. Each DLL has its own copy of this static (separate images), so the static bool
+    // alone can't coordinate across them — we need a shared kernel object. Scope it to THIS
+    // process id (not a machine-global "Global\\..." name), so two proxies in one process
+    // dedupe while a host running two Unreal servers still gets BOTH cores. (The old
+    // machine-global mutex silently killed the second server's core.)
     static bool s_booted = false;
-    CreateMutexA(NULL, FALSE, "Global\\ServerManagerTakaroCore");
-    if (GetLastError() == ERROR_ALREADY_EXISTS || s_booted) return;
+    if (s_booted) return;
+    std::string mtxName = "Local\\ServerManagerTakaroCore-" + std::to_string(GetCurrentProcessId());
+    CreateMutexA(NULL, FALSE, mtxName.c_str());
+    if (GetLastError() == ERROR_ALREADY_EXISTS) return;   // another proxy DLL in this process booted first
     s_booted = true;
 
     computePaths();

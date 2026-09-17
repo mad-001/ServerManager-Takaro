@@ -228,7 +228,10 @@ local function installChat()
             local sok, serr = pcall(function()
                 local name, msg, channel = spec.extract(self, a, b, c)
                 if not msg or msg == "" then return end
-                if msg:sub(1,1) == "/" then return end          -- skip slash-commands
+                -- NOTE: do NOT drop messages that start with "/". "/" is Takaro's default
+                -- command prefix, so filtering it here means /ping, /help, /shop, /tp etc.
+                -- never reach Takaro. If a game consumes its own slash commands that is the
+                -- game's concern; the connector must forward everything the player typed.
                 if isEcho(msg) then return end                  -- skip our own broadcasts (no feedback loop)
                 -- A single-FString server broadcast has no sender; emit an empty player
                 -- rather than duplicating the message text into name/gameId.
@@ -418,10 +421,13 @@ LoopAsync(TC.POLL_MS, function()
     return false
 end)
 
--- roster loop (join/leave/death diff + players.json)
+-- roster loop (join/leave/death diff + players.json). LoopAsync runs on a UE4SS worker
+-- thread; the body walks live UObjects (FindAllOf/PlayerState reads/net-id Conv), so it
+-- MUST run on the game thread or it can race garbage collection and crash a busy server.
+-- Same pattern processReqFile uses for action dispatch.
 ExecuteWithDelay(5000, function()
     LoopAsync(TC.ROSTER_MS, function()
-        pcall(publishRosterAndDiff)
+        ExecuteInGameThread(function() pcall(publishRosterAndDiff) end)
         return false
     end)
 end)

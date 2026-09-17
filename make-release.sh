@@ -70,9 +70,24 @@ cp mod/TakaroConnector/TakaroConfig.txt "$ROOT/ue4ss/Mods/TakaroConnector/Takaro
 printf -- '-- Default universal profile: chat/death auto-discover at runtime.\n-- For a tuned profile, copy profiles/<game>.lua over this file.\nreturn { name = "Auto-detect (universal)" }\n' \
   > "$ROOT/ue4ss/Mods/TakaroConnector/Scripts/profile.lua"
 
-# 4) mods.txt — keep UE4SS's own built-in enablement, just add our mod
-grep -q '^TakaroConnector' "$ROOT/ue4ss/Mods/mods.txt" 2>/dev/null \
-  || printf '\nTakaroConnector : 1\n' >> "$ROOT/ue4ss/Mods/mods.txt"
+# 4) mods.txt — a dedicated server should run ONLY the connector. UE4SS ships with
+#    CheatManagerEnablerMod / ConsoleEnablerMod / ConsoleCommandsMod / BPModLoaderMod etc.
+#    enabled, which add cheat + console surface and load cost with zero benefit here (our
+#    connector is pure Lua on the core runtime). Force every bundled mod OFF and enable only
+#    TakaroConnector.
+MODS="$ROOT/ue4ss/Mods/mods.txt"
+if [ -f "$MODS" ]; then
+  awk '
+    /^[A-Za-z0-9_]+[ \t]*:[ \t]*[01]/ {
+      if ($1 == "TakaroConnector") { print "TakaroConnector : 1" } else { print $1 " : 0" }
+      seen[$1]=1; next
+    }
+    { print }
+    END { if (!seen["TakaroConnector"]) print "TakaroConnector : 1" }
+  ' "$MODS" > "$MODS.tmp" && mv "$MODS.tmp" "$MODS"
+else
+  printf 'TakaroConnector : 1\n' > "$MODS"
+fi
 
 # 5) per-game profiles (reference; tucked in the mod folder, not the Win64 root)
 cp profiles/*.lua "$ROOT/ue4ss/Mods/TakaroConnector/profiles/"
