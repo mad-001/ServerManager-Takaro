@@ -17,11 +17,37 @@
 // Every file is published atomically (write .tmp then rename), so a reader never sees
 // a half-written file. Entry point: StartTakaroCore() — call once on DLL load.
 
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>       // must precede windows.h; used by the in-DLL RCON client
-#include <ws2tcpip.h>
-#include <windows.h>
-#include <winhttp.h>
+#ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #include <winsock2.h>       // must precede windows.h; used by the in-DLL RCON client
+  #include <ws2tcpip.h>
+  #include <windows.h>
+  #include <winhttp.h>
+#else
+  // ── Linux/POSIX build (native UE4SS-Linux path; the core is an LD_PRELOAD .so) ──
+  // The same core, minus the Windows OS calls: sockets are POSIX, TLS+WebSocket is
+  // OpenSSL (WinHTTP has no Linux twin), and a tiny Win32 compat shim below lets the
+  // shared body compile unchanged.
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <unistd.h>
+  #include <dirent.h>
+  #include <errno.h>
+  #include <sys/time.h>
+  #include <openssl/ssl.h>
+  #include <openssl/err.h>
+  typedef int SOCKET;
+  typedef unsigned long DWORD;
+  #define INVALID_SOCKET (-1)
+  #define SOCKET_ERROR   (-1)
+  #define closesocket(s) ::close(s)
+  #define DeleteFileA(p) (::remove(p))
+  #define _snprintf snprintf
+  static inline void SleepMs(int ms) { if (ms > 0) usleep(ms * 1000); }
+  #define Sleep(ms) SleepMs((int)(ms))
+#endif
 
 #include <string>
 #include <vector>
@@ -33,6 +59,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <sys/stat.h>
@@ -67,6 +94,10 @@ std::string RCON_SHUTDOWN_CMD;            // optional: game's RCON shutdown cmd 
 #ifndef TAKARO_WS_HOST
 #define TAKARO_WS_HOST L"connect.takaro.io"
 #endif
+// Narrow copy of the host for the Linux OpenSSL path (WinHTTP takes the wide one).
+#ifndef TAKARO_WS_HOST_A
+#define TAKARO_WS_HOST_A "connect.takaro.io"
+#endif
 // Port and TLS, same rationale as the host: overridable only at build time so a
 // shipped DLL can never be pointed at a plaintext local endpoint.
 #ifndef TAKARO_WS_PORT
@@ -85,8 +116,14 @@ std::atomic<bool> g_running{true};
 std::atomic<bool> g_connected{false};
 std::atomic<bool> g_startupSent{false};
 
+#ifdef _WIN32
 HINTERNET g_wsSession = NULL, g_wsConn = NULL, g_ws = NULL;
-std::mutex g_wsMutex;      // guards g_ws + sends
+#else
+SSL_CTX* g_sslCtx = nullptr;
+SSL*     g_ssl    = nullptr;   // the live TLS websocket
+int      g_wsSock = -1;
+#endif
+std::mutex g_wsMutex;      // guards the websocket + sends
 std::mutex g_logMutex;
 std::mutex g_cacheMutex;
 std::mutex g_actionMutex;  // serializes gameAction (one mailbox request at a time)
@@ -99,10 +136,18 @@ const uint64_t STEAM64_BASE = 76561197960265728ULL;
 
 // ─── Logging ───────────────────────────────────────────────────────────────────
 std::string nowStamp() {
-    SYSTEMTIME st; GetSystemTime(&st);
     char b[40];
+#ifdef _WIN32
+    SYSTEMTIME st; GetSystemTime(&st);
     _snprintf(b, sizeof(b), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
               st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+#else
+    struct timeval tv; gettimeofday(&tv, nullptr);
+    struct tm g; gmtime_r(&tv.tv_sec, &g);
+    snprintf(b, sizeof(b), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+             g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour, g.tm_min, g.tm_sec,
+             (int)(tv.tv_usec / 1000));
+#endif
     return b;
 }
 void logmsg(const std::string& m) {
@@ -121,32 +166,53 @@ std::string trim(const std::string& s) {
 }
 
 bool dirExists(const std::string& p) {
+#ifdef _WIN32
     DWORD a = GetFileAttributesA(p.c_str());
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    struct stat st; return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+#endif
 }
+#ifdef _WIN32
 void ensureDir(const std::string& p) { CreateDirectoryA(p.c_str(), NULL); }
+#else
+void ensureDir(const std::string& p) { mkdir(p.c_str(), 0775); }
+#endif
 
 // The game exe dir holds winmm.dll + ue4ss\. The TakaroConnector mod may live under a
 // couple of standard UE4SS mods roots — probe them so one DLL fits every layout.
 void computePaths() {
+#ifdef _WIN32
+    const char SEP = '\\';
     char exe[MAX_PATH]; GetModuleFileNameA(NULL, exe, MAX_PATH);
-    char* sl = strrchr(exe, '\\'); if (sl) *sl = '\0';
+    char* sl = strrchr(exe, SEP); if (sl) *sl = '\0';
     g_gameDir = exe;
     const char* roots[] = { "\\ue4ss\\Mods", "\\Mods", "\\ue4ss\\mods" };
     g_modDir = g_gameDir + "\\ue4ss\\Mods\\TakaroConnector";   // default
+#else
+    const char SEP = '/';
+    char exe[4096]; ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0) n = 0; exe[n] = '\0';
+    char* sl = strrchr(exe, SEP); if (sl) *sl = '\0';
+    g_gameDir = exe;
+    // UE4SS-Linux keeps Mods next to the server binary (Pal/Binaries/Linux/Mods/...).
+    const char* roots[] = { "/Mods", "/ue4ss/Mods", "/ue4ss/mods" };
+    g_modDir = g_gameDir + "/Mods/TakaroConnector";           // default
+#endif
     for (const char* r : roots) {
-        std::string cand = g_gameDir + r + "\\TakaroConnector";
+        std::string cand = g_gameDir + r + SEP + "TakaroConnector";
         if (dirExists(cand)) { g_modDir = cand; break; }
     }
-    g_configPath  = g_modDir + "\\TakaroConfig.txt";
-    g_logPath     = g_modDir + "\\core.log";
-    g_ipcDir      = g_modDir + "\\ipc";
-    g_evtDir      = g_ipcDir + "\\evt";
-    g_reqDir      = g_ipcDir + "\\req";
-    g_resDir      = g_ipcDir + "\\res";
-    g_reqFile     = g_ipcDir + "\\req.json";   // single-file mailbox (dir listing is dead in UE4SS Lua)
-    g_resFile     = g_ipcDir + "\\res.json";
-    g_playersPath = g_ipcDir + "\\players.json";
+    auto J = [&](const std::string& a, const char* b) { return a + SEP + b; };
+    g_configPath  = J(g_modDir, "TakaroConfig.txt");
+    g_logPath     = J(g_modDir, "core.log");
+    g_ipcDir      = J(g_modDir, "ipc");
+    g_evtDir      = J(g_ipcDir, "evt");
+    g_reqDir      = J(g_ipcDir, "req");
+    g_resDir      = J(g_ipcDir, "res");
+    g_reqFile     = J(g_ipcDir, "req.json");   // single-file mailbox (dir listing is dead in UE4SS Lua)
+    g_resFile     = J(g_ipcDir, "res.json");
+    g_playersPath = J(g_ipcDir, "players.json");
     ensureDir(g_modDir); ensureDir(g_ipcDir);
     ensureDir(g_evtDir); ensureDir(g_reqDir); ensureDir(g_resDir);
 }
@@ -209,12 +275,20 @@ bool writeFileAtomic(const std::string& path, const std::string& data) {
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
     fwrite(data.data(), 1, data.size(), f); fclose(f);
+#ifdef _WIN32
     MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+#else
+    rename(tmp.c_str(), path.c_str());   // atomic replace on POSIX
+#endif
     return true;
 }
 // List *.json files in dir, sorted ascending by name (so numeric seq is chronological).
 std::vector<std::string> listJson(const std::string& dir) {
     std::vector<std::string> names;
+    auto keep = [](const std::string& n) {
+        return n.size() > 5 && n.substr(n.size() - 5) == ".json";
+    };
+#ifdef _WIN32
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA((dir + "\\*.json").c_str(), &fd);
     if (h != INVALID_HANDLE_VALUE) {
@@ -225,6 +299,17 @@ std::vector<std::string> listJson(const std::string& dir) {
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
+#else
+    DIR* d = opendir(dir.c_str());
+    if (d) {
+        struct dirent* e;
+        while ((e = readdir(d)) != nullptr) {
+            std::string n = e->d_name;
+            if (keep(n)) names.push_back(n);
+        }
+        closedir(d);
+    }
+#endif
     std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
         // numeric-aware: shorter number sorts first, else lexicographic
         if (a.size() != b.size()) return a.size() < b.size();
@@ -292,11 +377,13 @@ bool rconExec(const std::string& cmd, std::string& out) {
     out.clear();
     if (RCON_PORT <= 0) { out = "RCON not configured"; return false; }
 
+#ifdef _WIN32
     if (!rcon::g_wsaInit) {
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) { out = "WSAStartup failed"; return false; }
         rcon::g_wsaInit = true;
     }
+#endif
 
     SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCKET) { out = "socket() failed"; return false; }
@@ -316,9 +403,15 @@ bool rconExec(const std::string& cmd, std::string& out) {
         freeaddrinfo(ai);
     }
 
-    DWORD tmo = 4000;                                    // connect/auth timeout
+#ifdef _WIN32
+    DWORD tmo = 4000;                                    // connect/auth timeout (ms on Winsock)
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tmo, sizeof(tmo));
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tmo, sizeof(tmo));
+#else
+    struct timeval tmo; tmo.tv_sec = 4; tmo.tv_usec = 0;  // POSIX SO_RCVTIMEO takes timeval
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof(tmo));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tmo, sizeof(tmo));
+#endif
     if (connect(s, (sockaddr*)&addr, sizeof(addr)) != 0) {
         closesocket(s); out = "RCON connect failed (" + RCON_HOST + ":" + std::to_string(RCON_PORT) + ")"; return false;
     }
@@ -348,13 +441,76 @@ bool rconExec(const std::string& cmd, std::string& out) {
 }
 
 // ─── WebSocket send ──────────────────────────────────────────────────────────────
+#ifndef _WIN32
+// ── Minimal RFC6455 client over the OpenSSL TLS stream ─────────────────────────────
+// Windows uses WinHTTP's built-in websocket; Linux has no equivalent, so we frame it
+// ourselves over the TLS BIO. Client frames are masked (required by the RFC); server
+// frames are not. Only used from wsRunOnce / wsSend, both under g_wsMutex for sends.
+static bool sslWriteAll(const char* p, size_t n) {
+    size_t off = 0;
+    while (off < n) { int w = SSL_write(g_ssl, p + off, (int)(n - off)); if (w <= 0) return false; off += (size_t)w; }
+    return true;
+}
+static bool sslReadN(char* p, size_t n) {
+    size_t off = 0;
+    while (off < n) { int r = SSL_read(g_ssl, p + off, (int)(n - off)); if (r <= 0) return false; off += (size_t)r; }
+    return true;
+}
+static bool wsSendFrame(uint8_t opcode, const std::string& payload) {
+    std::string f;
+    f.push_back((char)(0x80 | opcode));               // FIN + opcode
+    size_t len = payload.size();
+    const uint8_t MB = 0x80;                           // mask bit (client frames must be masked)
+    if (len < 126) f.push_back((char)(MB | (uint8_t)len));
+    else if (len <= 0xFFFF) { f.push_back((char)(MB | 126)); f.push_back((char)((len >> 8) & 0xFF)); f.push_back((char)(len & 0xFF)); }
+    else { f.push_back((char)(MB | 127)); for (int i = 7; i >= 0; --i) f.push_back((char)((len >> (8 * i)) & 0xFF)); }
+    uint8_t mask[4]; for (int i = 0; i < 4; ++i) mask[i] = (uint8_t)(rand() & 0xFF);
+    f.append((const char*)mask, 4);
+    size_t base = f.size(); f.resize(base + len);
+    for (size_t i = 0; i < len; ++i) f[base + i] = (char)((uint8_t)payload[i] ^ mask[i & 3]);
+    return sslWriteAll(f.data(), f.size());
+}
+// Read one full application message, reassembling fragments and answering pings.
+// Returns true with `out` set (text/binary); false on close or socket error.
+static bool wsRecvMessage(std::string& out) {
+    out.clear();
+    for (;;) {
+        unsigned char h[2];
+        if (!sslReadN((char*)h, 2)) return false;
+        bool fin = h[0] & 0x80; uint8_t opcode = h[0] & 0x0F; bool masked = h[1] & 0x80;
+        uint64_t len = h[1] & 0x7F;
+        if (len == 126) { unsigned char e[2]; if (!sslReadN((char*)e, 2)) return false; len = ((uint64_t)e[0] << 8) | e[1]; }
+        else if (len == 127) { unsigned char e[8]; if (!sslReadN((char*)e, 8)) return false; len = 0; for (int i = 0; i < 8; ++i) len = (len << 8) | e[i]; }
+        unsigned char mk[4] = {0,0,0,0};
+        if (masked && !sslReadN((char*)mk, 4)) return false;
+        std::string payload;
+        if (len > 0) {
+            if (len > 64ull * 1024 * 1024) return false;   // sanity cap
+            payload.resize((size_t)len);
+            if (!sslReadN(&payload[0], (size_t)len)) return false;
+            if (masked) for (size_t i = 0; i < payload.size(); ++i) payload[i] ^= mk[i & 3];
+        }
+        if (opcode == 0x8) return false;                    // close
+        if (opcode == 0x9) { std::lock_guard<std::mutex> lk(g_wsMutex); wsSendFrame(0xA, payload); continue; } // ping->pong
+        if (opcode == 0xA) continue;                        // pong
+        out += payload;                                     // text/binary/continuation
+        if (fin) return true;
+    }
+}
+#endif // !_WIN32
+
 bool wsSend(const json& obj) {
     std::string s = obj.dump();
     std::lock_guard<std::mutex> lk(g_wsMutex);
+#ifdef _WIN32
     if (!g_ws) return false;
     DWORD rc = WinHttpWebSocketSend(g_ws, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE,
                                     (PVOID)s.data(), (DWORD)s.size());
     return rc == 0;
+#else
+    if (!g_ssl) return false;
+    return wsSendFrame(0x1, s);   // text frame
+#endif
 }
 void sendResponse(const std::string& requestId, const json& payload) {
     wsSend(json{{"type","response"},{"requestId",requestId},{"payload",payload}});
@@ -587,6 +743,7 @@ void handleMessage(const json& msg) {
 }
 
 // Returns false when the connection is closed/failed (caller reconnects).
+#ifdef _WIN32
 bool wsRunOnce() {
     g_wsSession = WinHttpOpen(L"ServerManagerTakaro", WINHTTP_ACCESS_TYPE_NO_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -638,6 +795,92 @@ bool wsRunOnce() {
     if (g_wsSession) { WinHttpCloseHandle(g_wsSession); g_wsSession = NULL; }
     return false;
 }
+#else // ── Linux: TLS + RFC6455 over OpenSSL ──────────────────────────────────────
+
+static int tcpConnect(const char* host, int port) {
+    struct addrinfo hints{}, *res = nullptr;
+    hints.ai_socktype = SOCK_STREAM; hints.ai_family = AF_UNSPEC;
+    char portstr[16]; snprintf(portstr, sizeof(portstr), "%d", port);
+    if (getaddrinfo(host, portstr, &hints, &res) != 0) return -1;
+    int fd = -1;
+    for (auto p = res; p; p = p->ai_next) {
+        fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (fd < 0) continue;
+        if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) break;
+        ::close(fd); fd = -1;
+    }
+    freeaddrinfo(res);
+    return fd;
+}
+
+bool wsRunOnce() {
+    const char* host = TAKARO_WS_HOST_A;
+    int fd = tcpConnect(host, TAKARO_WS_PORT);
+    if (fd < 0) { logmsg("WS: TCP connect failed"); return false; }
+
+    g_sslCtx = SSL_CTX_new(TLS_client_method());
+    if (!g_sslCtx) { ::close(fd); return false; }
+    SSL_CTX_set_default_verify_paths(g_sslCtx);
+    SSL* ssl = SSL_new(g_sslCtx);
+    SSL_set_fd(ssl, fd);
+    SSL_set_tlsext_host_name(ssl, host);                      // SNI
+#ifndef TAKARO_TLS_INSECURE
+    // Verify the server cert + hostname (the WS host is fixed; this blocks MITM). The
+    // target container needs ca-certificates; if it lacks them, build with -DTAKARO_TLS_INSECURE.
+    SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
+    X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), host, 0);
+#endif
+    if (SSL_connect(ssl) != 1) {
+        logmsg("WS: TLS handshake failed");
+        SSL_free(ssl); SSL_CTX_free(g_sslCtx); g_sslCtx = nullptr; ::close(fd); return false;
+    }
+    { std::lock_guard<std::mutex> lk(g_wsMutex); g_ssl = ssl; g_wsSock = fd; }
+
+    // WebSocket upgrade handshake (fixed RFC sample key; the server echoes an Accept we
+    // don't need to validate for a client). Read the response headers byte-by-byte so we
+    // never consume bytes belonging to the first data frame.
+    std::string req =
+        std::string("GET / HTTP/1.1\r\nHost: ") + host + "\r\n"
+        "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    if (!sslWriteAll(req.data(), req.size())) { logmsg("WS: upgrade send failed"); }
+    std::string hdr; char c;
+    while (hdr.size() < 8192) {
+        if (!sslReadN(&c, 1)) { hdr.clear(); break; }
+        hdr.push_back(c);
+        if (hdr.size() >= 4 && hdr.compare(hdr.size() - 4, 4, "\r\n\r\n") == 0) break;
+    }
+    bool upgraded = hdr.find(" 101 ") != std::string::npos;
+    if (!upgraded) {
+        logmsg("WS: upgrade rejected: " + (hdr.empty() ? std::string("no response") : hdr.substr(0, hdr.find("\r\n"))));
+        g_connected = false;
+        std::lock_guard<std::mutex> lk(g_wsMutex);
+        SSL_shutdown(ssl); SSL_free(ssl); SSL_CTX_free(g_sslCtx); g_sslCtx = nullptr;
+        ::close(fd); g_ssl = nullptr; g_wsSock = -1;
+        return false;
+    }
+
+    logmsg("Connected. Identifying as \"" + IDENTITY_TOKEN + "\"");
+    json idp{{"identityToken", IDENTITY_TOKEN}};
+    if (!REGISTRATION_TOKEN.empty()) idp["registrationToken"] = REGISTRATION_TOKEN;
+    wsSend(json{{"type","identify"},{"payload",idp}});
+
+    while (g_running) {
+        std::string m;
+        if (!wsRecvMessage(m)) break;
+        if (m.empty()) continue;
+        try { handleMessage(json::parse(m)); } catch (...) { logmsg("Parse error on WS message"); }
+    }
+
+    g_connected = false;
+    { std::lock_guard<std::mutex> lk(g_wsMutex);
+      wsSendFrame(0x8, "");                                  // polite close
+      SSL_shutdown(ssl); SSL_free(ssl);
+      SSL_CTX_free(g_sslCtx); g_sslCtx = nullptr;
+      ::close(fd); g_ssl = nullptr; g_wsSock = -1; }
+    return false;
+}
+#endif // _WIN32
 
 void wsLoop() {
     int delay = 3000;
@@ -661,9 +904,12 @@ void coreBoot() {
     // machine-global mutex silently killed the second server's core.)
     static bool s_booted = false;
     if (s_booted) return;
+#ifdef _WIN32
     std::string mtxName = "Local\\ServerManagerTakaroCore-" + std::to_string(GetCurrentProcessId());
     CreateMutexA(NULL, FALSE, mtxName.c_str());
     if (GetLastError() == ERROR_ALREADY_EXISTS) return;   // another proxy DLL in this process booted first
+#endif
+    // On Linux only one core .so is LD_PRELOAD'd per process, so the static bool is enough.
     s_booted = true;
 
     computePaths();
@@ -680,3 +926,14 @@ void coreBoot() {
 extern "C" void StartTakaroCore() {
     coreBoot();
 }
+
+#ifndef _WIN32
+// Linux delivery: this core is a small .so LD_PRELOAD'd into the UE dedicated-server
+// process alongside native UE4SS-Linux (which loads the shared Lua profile unchanged).
+// The constructor runs at load; it hands off to a detached thread so no real work runs
+// inside the dynamic linker, and gives UE4SS a moment to lay down the mod/ipc tree.
+__attribute__((constructor))
+static void takaro_linux_boot() {
+    std::thread([] { SleepMs(2000); StartTakaroCore(); }).detach();
+}
+#endif
