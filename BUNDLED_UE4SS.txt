@@ -1,0 +1,3 @@
+Bundled UE4SS: 3.0.1-1136-g35d1795d (RE-UE4SS experimental-latest)
+Upgraded from 3.0.1-1088 for improved UE5.5-5.7 AOB scanning (Lua layer on newer engines).
+Per-game signature overrides for stubborn UE5.6+ titles: RE-UE4SS release zCustomGameConfigs.zip (applied per game, see profiles/<game>.lua notes, e.g. VEIN).
