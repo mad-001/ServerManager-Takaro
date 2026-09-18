@@ -1,0 +1,90 @@
+# Runs make-release.sh on every push to master (bundling the pinned UE4SS runtime).
+# Creates a GitHub release (tag = "v" + VERSION) only when that tag does not exist yet.
+# To ship a release: bump VERSION in your PR and merge it.
+name: Build & Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # Pinned RE-UE4SS runtime to bundle (see BUNDLED_UE4SS.txt / make-release.sh).
+  # Asset names change per build; update this when upgrading UE4SS.
+  UE4SS_TAG: experimental-latest
+  UE4SS_ASSET: UE4SS_v3.0.1-1136-g35d1795d.zip
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read VERSION
+        id: ver
+        run: |
+          v=$(tr -d '[:space:]' < VERSION | sed 's/^[vV]//')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether tag already exists
+        id: check
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download pinned UE4SS runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p vendor
+          gh release download "$UE4SS_TAG" --repo UE4SS-RE/RE-UE4SS -p "$UE4SS_ASSET" -D vendor
+          unzip -q "vendor/$UE4SS_ASSET" -d vendor   # yields vendor/ue4ss/UE4SS.dll
+          test -f vendor/ue4ss/UE4SS.dll
+
+      - name: Build release archive
+        run: |
+          chmod +x make-release.sh
+          ./make-release.sh "${{ steps.ver.outputs.version }}"
+          mkdir -p release
+          mv "ServerManager-Takaro-${{ steps.ver.outputs.tag }}.zip" release/
+          cp core/libtakarocore.so release/
+          ls -la release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: needs.build.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release
+      - name: Create release ${{ needs.build.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.build.outputs.tag }}" \
+            --title "${{ needs.build.outputs.tag }}" \
+            --generate-notes \
+            release/*
