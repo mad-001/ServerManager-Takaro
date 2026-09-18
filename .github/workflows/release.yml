@@ -15,12 +15,6 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-env:
-  # Pinned RE-UE4SS runtime to bundle (see BUNDLED_UE4SS.txt / make-release.sh).
-  # Asset names change per build; update this when upgrading UE4SS.
-  UE4SS_TAG: experimental-latest
-  UE4SS_ASSET: UE4SS_v3.0.1-1136-g35d1795d.zip
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -46,14 +40,33 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download pinned UE4SS runtime
+      - name: Download the UE4SS runtime named in BUNDLED_UE4SS.txt
+        # First line is "Bundled UE4SS: <version> (RE-UE4SS <release tag>)". Bumping that
+        # line is all that is needed when upgrading UE4SS.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          ver=$(sed -nE 's/^Bundled UE4SS:[[:space:]]*([^[:space:]]+).*/\1/p' BUNDLED_UE4SS.txt | head -1)
+          tag=$(sed -nE 's/.*\(RE-UE4SS[[:space:]]+([^)[:space:]]+)\).*/\1/p' BUNDLED_UE4SS.txt | head -1)
+          [ -n "$ver" ] || { echo "could not parse UE4SS version from BUNDLED_UE4SS.txt" >&2; exit 1; }
+          tag="${tag:-experimental-latest}"
+          asset="UE4SS_v${ver}.zip"
+          echo "UE4SS $ver from release $tag ($asset)"
           mkdir -p vendor
-          gh release download "$UE4SS_TAG" --repo UE4SS-RE/RE-UE4SS -p "$UE4SS_ASSET" -D vendor
-          unzip -q "vendor/$UE4SS_ASSET" -d vendor   # yields vendor/ue4ss/UE4SS.dll
+          gh release download "$tag" --repo UE4SS-RE/RE-UE4SS -p "$asset" -D vendor
+          unzip -q "vendor/$asset" -d vendor   # yields vendor/ue4ss/UE4SS.dll
           test -f vendor/ue4ss/UE4SS.dll
+
+      - name: Install cross-compilers (MinGW-w64 for the DLLs, OpenSSL headers for the .so)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q g++-mingw-w64-x86-64 libssl-dev
+
+      - name: Build winmm.dll, version.dll and libtakarocore.so from source
+        run: |
+          chmod +x core/build.sh
+          ./core/build.sh
+          test -f core/winmm.dll && test -f core/version.dll && test -f core/libtakarocore.so
 
       - name: Build release archive
         run: |
