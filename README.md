@@ -47,6 +47,27 @@ with UE4SS + this mod, and observed. Full breakdown in
 > real server config — so they show as *confirmed-compatible*, and their hooks
 > auto-discover once running on a properly-configured server (i.e. yours).
 
+## Hub: dtMatrix
+
+The core speaks the Takaro generic WebSocket protocol to the **dtMatrix generic hub**
+(`ws://127.0.0.1:8442/` by default, i.e. dtMatrix on the same PC). Point it elsewhere with
+`WS_URL=ws://host:port/` or `wss://host:port/` in `TakaroConfig.txt`. `SERVER_NAME` and
+`REGISTRATION_TOKEN` must match the server's `generic` entry in dtMatrix `config.json`.
+
+## Astroneer (RCON mode)
+
+Astroneer is detected from the server exe (`AstroServer-Win64-Shipping.exe`, or
+`RCON_PROTOCOL=astroneer`). The core then talks to the game's own console on localhost
+(`ConsolePort`/`ConsolePassword` from `Astro\Saved\Config\WindowsServer\AstroServerSettings.ini`,
+default port 1234): the roster and join/leave come from `DSListPlayers`, and dtMatrix's console runs
+every bridge command (`help` lists them; the `DS` prefix is added): ListPlayers, kick <name>,
+KickPlayerGuid, SetPlayerCategoryForPlayerName, ServerStatistics, ServerShutdown, SetDenyUnlisted,
+ListGames, SaveGame, LoadGame, plus kick/ban/unban/listBans actions. Only `winmm.dll` +
+`ue4ss\Mods\TakaroConnector\TakaroConfig.txt` are needed; UE4SS is optional.
+
+Tested on 1.45.1: everything above works. Game-side, not the mod (checked without the DLL): `NewGame`
+crashes the 1.45.1 dedicated server, and `RenameGame`, `DeleteGame` and `SetPassword` do nothing.
+
 ## Repository layout
 
 ```

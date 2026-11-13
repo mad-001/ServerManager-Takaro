@@ -1,8 +1,9 @@
 // takaro_core.cpp — ServerManager-Takaro universal core, embedded in winmm.dll.
 //
 // One in-process core, identical for every Unreal Engine game. It owns:
-//   • a WinHTTP secure WebSocket straight to wss://connect.takaro.io/ (TLS + framing
-//     done by the OS — no OpenSSL, no Node, no separate bridge process), and
+//   • a WinHTTP WebSocket straight to the dtMatrix generic hub (Takaro generic protocol;
+//     default ws://127.0.0.1:8442/, WS_URL overrides; no separate bridge process),
+//   • for Astroneer, the game's own console (RCON) on localhost for roster + commands, and
 //   • file-based IPC to the UE4SS Lua profile that hooks the game.
 //
 // Why files and not UDP? VoxelTurf exposes a native N_EXTERNAL UDP API to its Lua;
@@ -86,26 +87,34 @@ std::string RCON_HOST     = "127.0.0.1";
 int         RCON_PORT     = 0;            // 0 = RCON disabled (fall back to UE console)
 std::string RCON_PASSWORD;
 std::string RCON_SHUTDOWN_CMD;            // optional: game's RCON shutdown cmd (e.g. "Shutdown 1")
+// RCON wire protocol: "source" (Valve Source RCON, default) or "astroneer" (Astroneer's
+// line protocol: password line, then "DS<Command>" lines, JSON replies). Astroneer is also
+// auto-detected from the server exe name, and its ConsolePort/ConsolePassword are read
+// from AstroServerSettings.ini when RCON_PORT/RCON_PASSWORD are not set here.
+std::string RCON_PROTOCOL = "source";
+int ROSTER_POLL_MS = 3000;                // astroneer: how often the roster is read over RCON
 
-// Takaro websocket host. Hardcoded on purpose -- deliberately NOT readable from
-// TakaroConfig.txt, so a shipped build can never be pointed somewhere else by an
-// end user. Internal test builds override it at compile time:
-//     -DTAKARO_WS_HOST=L"connect.k8s.takaro.dev"
+// Hub websocket endpoint: dtMatrix's generic hub (Takaro generic protocol). Default is the
+// plain local listener on the same machine; WS_URL in TakaroConfig.txt overrides it
+// (ws://host:port/ or wss://host:port/). Build-time overrides still work:
+//     -DTAKARO_WS_HOST=L"..." -DTAKARO_WS_HOST_A="..." -DTAKARO_WS_PORT=... -DTAKARO_WS_SECURE=...
 #ifndef TAKARO_WS_HOST
-#define TAKARO_WS_HOST L"connect.takaro.io"
+#define TAKARO_WS_HOST L"127.0.0.1"
 #endif
 // Narrow copy of the host for the Linux OpenSSL path (WinHTTP takes the wide one).
 #ifndef TAKARO_WS_HOST_A
-#define TAKARO_WS_HOST_A "connect.takaro.io"
+#define TAKARO_WS_HOST_A "127.0.0.1"
 #endif
-// Port and TLS, same rationale as the host: overridable only at build time so a
-// shipped DLL can never be pointed at a plaintext local endpoint.
 #ifndef TAKARO_WS_PORT
-#define TAKARO_WS_PORT 443
+#define TAKARO_WS_PORT 8442
 #endif
 #ifndef TAKARO_WS_SECURE
-#define TAKARO_WS_SECURE 1
+#define TAKARO_WS_SECURE 0
 #endif
+std::string g_wsHost = TAKARO_WS_HOST_A;
+int         g_wsPort = TAKARO_WS_PORT;
+bool        g_wsSecure = TAKARO_WS_SECURE != 0;
+std::string g_wsPath = "/";
 
 std::string g_gameDir, g_modDir, g_ipcDir, g_configPath, g_logPath;
 std::string g_evtDir, g_reqDir, g_resDir, g_playersPath;
@@ -248,6 +257,34 @@ void loadConfig() {
     if (!get("RCON_PORT").empty())     RCON_PORT     = atoi(get("RCON_PORT").c_str());
     RCON_PASSWORD     = get("RCON_PASSWORD");
     RCON_SHUTDOWN_CMD = get("RCON_SHUTDOWN_CMD");
+    if (!get("RCON_PROTOCOL").empty()) {
+        RCON_PROTOCOL = get("RCON_PROTOCOL");
+        std::transform(RCON_PROTOCOL.begin(), RCON_PROTOCOL.end(), RCON_PROTOCOL.begin(), ::tolower);
+    }
+    if (!get("ROSTER_POLL_MS").empty()) ROSTER_POLL_MS = atoi(get("ROSTER_POLL_MS").c_str());
+    if (ROSTER_POLL_MS < 500) ROSTER_POLL_MS = 500;
+
+    // WS_URL = ws[s]://host[:port][/path]
+    std::string url = get("WS_URL");
+    if (!url.empty()) {
+        bool secure = false; std::string rest;
+        if (url.compare(0, 6, "wss://") == 0)      { secure = true;  rest = url.substr(6); }
+        else if (url.compare(0, 5, "ws://") == 0)  { secure = false; rest = url.substr(5); }
+        if (!rest.empty()) {
+            size_t sl = rest.find('/');
+            std::string hostport = rest.substr(0, sl);
+            g_wsPath = sl == std::string::npos ? "/" : rest.substr(sl);
+            size_t colon = hostport.rfind(':');
+            if (colon != std::string::npos) {
+                g_wsHost = hostport.substr(0, colon);
+                g_wsPort = atoi(hostport.substr(colon + 1).c_str());
+            } else {
+                g_wsHost = hostport;
+                g_wsPort = secure ? 443 : 80;
+            }
+            g_wsSecure = secure;
+        }
+    }
 }
 
 std::string toSteamId64(const std::string& acct) {
@@ -440,6 +477,128 @@ bool rconExec(const std::string& cmd, std::string& out) {
     return true;
 }
 
+// ─── Astroneer RCON (in-process) ─────────────────────────────────────────────────
+// Astroneer's dedicated server has its own console protocol on ConsolePort (TCP): the
+// first line is the password, then each line is a "DS<Command> args" command; replies are
+// one JSON object. Some commands (DSSaveGame, DSNewGame, DSServerShutdown) send no reply.
+bool g_astro = false;   // Astroneer mode (RCON_PROTOCOL=astroneer or AstroServer exe)
+
+static void setRecvTimeout(SOCKET s, int ms) {
+#ifdef _WIN32
+    DWORD t = (DWORD)ms;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&t, sizeof(t));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&t, sizeof(t));
+#else
+    struct timeval t; t.tv_sec = ms / 1000; t.tv_usec = (ms % 1000) * 1000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &t, sizeof(t));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &t, sizeof(t));
+#endif
+}
+
+// Port/password from TakaroConfig.txt win; otherwise read them from the server's own
+// AstroServerSettings.ini (Astro\Saved\Config\WindowsServer, two levels above Win64).
+// Re-read on every call, so a changed ini (the server rewrites it) is picked up.
+static void astroEndpoint(int& port, std::string& pass) {
+    port = RCON_PORT; pass = RCON_PASSWORD;
+    if (port > 0 && !pass.empty()) return;
+    std::string ini;
+#ifdef _WIN32
+    std::string p = g_gameDir + "\\..\\..\\Saved\\Config\\WindowsServer\\AstroServerSettings.ini";
+#else
+    std::string p = g_gameDir + "/../../Saved/Config/LinuxServer/AstroServerSettings.ini";
+#endif
+    bool portSet = port > 0;
+    if (readFile(p, ini)) {
+        size_t pos = 0;
+        while (pos < ini.size()) {
+            size_t nl = ini.find('\n', pos);
+            std::string line = trim(ini.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos));
+            pos = (nl == std::string::npos) ? ini.size() : nl + 1;
+            if (!portSet && line.compare(0, 12, "ConsolePort=") == 0) port = atoi(line.c_str() + 12);
+            else if (pass.empty() && line.compare(0, 16, "ConsolePassword=") == 0) pass = trim(line.substr(16));
+        }
+    }
+    if (port <= 0) port = 1234;   // the game's default (DefaultAstroServerSettings.ini in the pak)
+}
+
+static bool sendAll(SOCKET s, const std::string& d) {
+    size_t off = 0;
+    while (off < d.size()) {
+        int n = send(s, d.data() + off, (int)(d.size() - off), 0);
+        if (n <= 0) return false;
+        off += (size_t)n;
+    }
+    return true;
+}
+
+// Run one Astroneer console command (with or without the DS prefix). `out` gets the raw
+// reply ("" when the command sends none) or an error string when it returns false.
+bool astroExec(const std::string& command, std::string& out) {
+    std::lock_guard<std::mutex> lk(rcon::g_mtx);
+    out.clear();
+    int port; std::string pass;
+    astroEndpoint(port, pass);
+    if (port <= 0) { out = "Astroneer RCON not configured (no ConsolePort in AstroServerSettings.ini)"; return false; }
+
+#ifdef _WIN32
+    if (!rcon::g_wsaInit) {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) { out = "WSAStartup failed"; return false; }
+        rcon::g_wsaInit = true;
+    }
+#endif
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) { out = "socket() failed"; return false; }
+    sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons((u_short)port);
+    addr.sin_addr.s_addr = inet_addr(RCON_HOST.c_str());
+    setRecvTimeout(s, 4000);
+    if (connect(s, (sockaddr*)&addr, sizeof(addr)) != 0) {
+        closesocket(s); out = "RCON connect failed (" + RCON_HOST + ":" + std::to_string(port) + ")"; return false;
+    }
+    std::string cmd = trim(command);
+    if (!(cmd.size() > 2 && cmd[0] == 'D' && cmd[1] == 'S' && isupper((unsigned char)cmd[2]))) cmd = "DS" + cmd;
+    if (!sendAll(s, pass + "\n")) { closesocket(s); out = "RCON password send failed"; return false; }
+    Sleep(150);
+    if (!sendAll(s, cmd + "\n")) { closesocket(s); out = "RCON command send failed"; return false; }
+
+    // Wait up to 1.5 s for the first bytes, then read until the reply parses as JSON or
+    // goes quiet for 300 ms. No bytes at all = a command that sends no reply.
+    setRecvTimeout(s, 1500);
+    char buf[16384];
+    for (int i = 0; i < 512; i++) {
+        int r = recv(s, buf, sizeof(buf), 0);
+        if (r <= 0) break;
+        out.append(buf, r);
+        std::string t = trim(out);
+        if (!t.empty() && json::accept(t)) break;
+        setRecvTimeout(s, 300);
+    }
+    closesocket(s);
+    out = trim(out);
+    return true;
+}
+
+// DSListPlayers -> playerInfo array (every known player, online or not). False on error.
+static bool astroListPlayers(json& list) {
+    list = json::array();
+    std::string out;
+    if (!astroExec("DSListPlayers", out)) return false;
+    try {
+        json j = json::parse(out);
+        if (j.is_object() && j.contains("playerInfo") && j["playerInfo"].is_array()) { list = j["playerInfo"]; return true; }
+    } catch (...) {}
+    return false;
+}
+static std::string astroGuid(const json& p) {
+    if (!p.is_object() || !p.contains("playerGuid")) return "";
+    const json& g = p["playerGuid"];
+    if (g.is_string()) return g.get<std::string>();
+    if (g.is_number()) return g.dump();
+    return "";
+}
+
 // ─── WebSocket send ──────────────────────────────────────────────────────────────
 #ifndef _WIN32
 // ── Minimal RFC6455 client over the OpenSSL TLS stream ─────────────────────────────
@@ -520,12 +679,12 @@ void sendEvent(const std::string& type, json data) {
     if (!data.is_object()) data = json::object();
     data["type"] = type;
     wsSend(json{{"type","gameEvent"},{"payload",{{"type",type},{"data",data}}}});
-    logmsg("Event -> Takaro: " + type);
+    logmsg("Event -> hub: " + type);
 }
 void sendLog(const std::string& msg) {
     if (!g_connected) { logmsg("(log queued, not yet connected) " + msg); return; }
     wsSend(json{{"type","gameEvent"},{"payload",{{"type","log"},{"data",{{"type","log"},{"msg",msg}}}}}});
-    logmsg("Event -> Takaro: log :: " + msg);
+    logmsg("Event -> hub: log :: " + msg);
 }
 
 // ─── File IPC: ask the Lua profile to perform a game action ───────────────────────
@@ -577,6 +736,226 @@ static std::string jstr(const json& j, const char* key, const std::string& def =
     return it->get<std::string>();
 }
 
+// ─── Astroneer: roster + actions over its RCON ───────────────────────────────────
+std::atomic<bool> g_rosterInit{false};   // first roster read sets the baseline without join events
+
+static json playerJson(const PlayerInfo& p) {
+    json e{{"gameId",p.gameId},{"name",p.name}};
+    if (!p.steamId.empty())              e["steamId"]              = p.steamId;
+    if (!p.epicOnlineServicesId.empty()) e["epicOnlineServicesId"] = p.epicOnlineServicesId;
+    if (!p.platformId.empty())           e["platformId"]           = p.platformId;
+    return e;
+}
+
+// Online players from DSListPlayers; diff against the last read -> join/leave events.
+static void astroPollRoster() {
+    json list;
+    if (!astroListPlayers(list)) return;
+    std::map<std::string, PlayerInfo> now;
+    for (auto& p : list) {
+        if (!p.is_object() || !p.value("inGame", false)) continue;
+        PlayerInfo pi;
+        pi.gameId = astroGuid(p);
+        pi.name   = jstr(p, "playerName");
+        if (pi.gameId.empty() || pi.name.empty()) continue;   // still joining (no name yet)
+        pi.platformId = "astroneer:" + pi.gameId;
+        now[pi.gameId] = pi;
+    }
+    std::vector<PlayerInfo> joined, left;
+    {
+        std::lock_guard<std::mutex> lk(g_cacheMutex);
+        if (g_rosterInit) {
+            for (auto& kv : now)       if (!g_players.count(kv.first)) joined.push_back(kv.second);
+            for (auto& kv : g_players) if (!now.count(kv.first))       left.push_back(kv.second);
+        }
+        g_players = now;
+        g_rosterInit = true;
+    }
+    for (auto& p : joined) sendEvent("player-connected",    json{{"player", playerJson(p)}});
+    for (auto& p : left)   sendEvent("player-disconnected", json{{"player", playerJson(p)}});
+}
+
+static std::string lowerStr(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+    return s;
+}
+static std::string targetGameId(const json& args) {
+    std::string g = jstr(args, "gameId");
+    if (g.empty() && args.is_object() && args.contains("player")) g = jstr(args["player"], "gameId");
+    return g;
+}
+// A reply with "status": false is a refusal; anything else (incl. no reply) counts as done.
+static bool astroOk(const std::string& out) {
+    try {
+        json j = json::parse(out);
+        if (j.is_object() && j.contains("status") && j["status"].is_boolean()) return j["status"].get<bool>();
+    } catch (...) {}
+    return true;
+}
+static std::string pretty(const std::string& out) {
+    if (out.empty()) return "Command executed (the server sends no reply for this command)";
+    try { return json::parse(out).dump(2); } catch (...) { return out; }
+}
+
+// Category by name is the reliable path on Astroneer; the GUID variant is the fallback.
+static bool astroSetCategory(const std::string& gid, const std::string& cat, std::string& out) {
+    json list; std::string name;
+    if (astroListPlayers(list))
+        for (auto& p : list) if (astroGuid(p) == gid) { name = jstr(p, "playerName"); break; }
+    bool ok = !name.empty()
+        ? astroExec("DSSetPlayerCategoryForPlayerName \"" + name + "\" " + cat, out)
+        : astroExec("DSSetPlayerCategoryGuid " + gid + " " + cat, out);
+    return ok && astroOk(out);
+}
+
+// DSServerShutdown saves and exits; if the process is still up 20 s later, end it so the
+// restart loop can bring it back (the old bridge force-killed it the same way).
+static void astroShutdownAsync() {
+    std::thread([] {
+        std::string o;
+        astroExec("DSServerShutdown", o);
+        Sleep(20000);
+#ifdef _WIN32
+        TerminateProcess(GetCurrentProcess(), 0);
+#else
+        _exit(0);
+#endif
+    }).detach();
+}
+
+static const char* ASTRO_HELP = R"(ASTRONEER SERVER COMMANDS (type them without the "DS" prefix; it is added for you)
+
+PLAYERS
+  ListPlayers                                   every known player: GUID, name, category, online
+  kick <playerName>                             kick by name (looked up to the GUID)
+  KickPlayerGuid <playerGuid>                   kick by GUID
+  SetPlayerCategoryForPlayerName "<name>" <cat> set a role by name (the reliable way)
+  SetPlayerCategoryGuid <playerGuid> <cat>      set a role by GUID
+     categories: Owner, Admin, Whitelisted, Unlisted, Blacklisted (= banned)
+
+SERVER
+  ServerStatistics                              build, FPS, players, active save, password/whitelist
+  ServerShutdown                                save and shut down (restarts if a restart loop runs it)
+  SetPassword <password>                        set the join password (empty = none)
+  SetDenyUnlisted <true|false>                  whitelist on/off
+
+SAVES
+  ListGames                                     active save + every save on the server
+  SaveGame [name]                               save now (optionally under a new name)
+  LoadGame <saveName>                           load a save and make it active
+  NewGame <saveName> [true|false]               start a new save (players reload); true = Glitchwalkers
+  RenameGame <oldName> <newName>                rename a save
+  DeleteGame <saveName>                         delete a save (permanent)
+
+CREATIVE (current save)
+  CreativeMode <true|false>, SetFuelFreeCreative, SetOxygenFreeCreative, SetInvincibleCreative,
+  SetInvisibleToHazardsCreative, SetBackpackPowerUnlimitedCreative <true|false>
+)";
+
+// Returns true when the action was answered here.
+static bool handleAstroRequest(const std::string& requestId, const std::string& action, const json& args) {
+    if (action == "testReachability") {
+        std::string o;
+        bool ok = astroExec("DSServerStatistics", o) && json::accept(o);
+        json r{{"connectable", ok}};
+        r["reason"] = ok ? json(nullptr) : json(o.empty() ? std::string("no reply from the Astroneer console") : o);
+        sendResponse(requestId, r);
+        return true;
+    }
+    if (action == "getPlayers" || action == "getPlayer") {
+        if (!g_rosterInit) astroPollRoster();
+        return false;   // answered from the roster cache below
+    }
+    if (action == "getServerInfo") {
+        std::string o; std::string version = "unknown";
+        if (astroExec("DSServerStatistics", o)) {
+            try { json s = json::parse(o); if (s.contains("build") && s["build"].is_string()) version = s["build"]; } catch (...) {}
+        }
+        sendResponse(requestId, json{{"name", IDENTITY_TOKEN.empty() ? "Astroneer Server" : IDENTITY_TOKEN},
+                                     {"version", version}});
+        return true;
+    }
+    if (action == "executeConsoleCommand") {
+        std::string cmd = trim(jstr(args, "command"));
+        if (cmd.empty()) cmd = trim(jstr(args, "rawCommand"));
+        if (cmd.empty()) { sendResponse(requestId, json{{"success",false},{"rawResult","Error: No command provided"}}); return true; }
+        std::string lc = lowerStr(cmd);
+        if (lc == "help") { sendResponse(requestId, json{{"success",true},{"rawResult",ASTRO_HELP}}); return true; }
+        if (lc.find("servershutdown") != std::string::npos) {
+            sendResponse(requestId, json{{"success",true},{"rawResult","Server shutdown initiated"}});
+            astroShutdownAsync();
+            return true;
+        }
+        // kick <name>: Astroneer only kicks by GUID, so look the name up first.
+        if (lc.compare(0, 5, "kick ") == 0) {
+            std::string target = trim(cmd.substr(5));
+            if (target.size() > 1 && target.front() == '"' && target.back() == '"') target = target.substr(1, target.size() - 2);
+            std::string gid;
+            bool numeric = !target.empty() && std::all_of(target.begin(), target.end(), ::isdigit);
+            if (numeric) gid = target;
+            else {
+                json list; astroListPlayers(list);
+                for (auto& p : list) if (lowerStr(jstr(p, "playerName")) == lowerStr(target)) { gid = astroGuid(p); target = jstr(p, "playerName"); break; }
+            }
+            if (gid.empty()) { sendResponse(requestId, json{{"success",false},{"rawResult","Error: Player \"" + target + "\" not found"}}); return true; }
+            std::string o; bool ok = astroExec("DSKickPlayerGuid " + gid, o) && astroOk(o);
+            sendResponse(requestId, json{{"success",ok},{"rawResult", ok ? "Kicked " + target + " (" + gid + ")" : pretty(o)}});
+            return true;
+        }
+        // NewGame <name>: since 1.45 the game also needs isGlitchwalkersGame; default it to false
+        // (a call without it is rejected and leaves the server in a state that later crashed it).
+        {
+            std::string n = lc.compare(0, 2, "ds") == 0 ? lc.substr(2) : lc;
+            if (n.compare(0, 8, "newgame ") == 0) {
+                std::string a = trim(cmd.substr(cmd.size() - (n.size() - 8)));
+                if (!a.empty() && a.find(' ') == std::string::npos) cmd += " false";
+            }
+        }
+        std::string o; bool ok = astroExec(cmd, o);
+        sendResponse(requestId, json{{"success", ok && astroOk(o)}, {"rawResult", ok ? pretty(o) : "Error: " + o}});
+        return true;
+    }
+    if (action == "kickPlayer") {
+        std::string gid = targetGameId(args), o;
+        bool ok = !gid.empty() && astroExec("DSKickPlayerGuid " + gid, o) && astroOk(o);
+        sendResponse(requestId, ok ? json{{"success",true}} : json{{"success",false},{"error", gid.empty() ? "No player specified" : o}});
+        return true;
+    }
+    if (action == "banPlayer" || action == "unbanPlayer") {
+        std::string gid = targetGameId(args), o;
+        bool ban = action == "banPlayer";
+        bool ok = !gid.empty() && astroSetCategory(gid, ban ? "Blacklisted" : "Unlisted", o);
+        if (ok && ban) {
+            bool online;
+            { std::lock_guard<std::mutex> lk(g_cacheMutex); online = g_players.count(gid) > 0; }
+            if (online) { std::string k; astroExec("DSKickPlayerGuid " + gid, k); }
+        }
+        sendResponse(requestId, ok ? json{{"success",true}} : json{{"success",false},{"error", gid.empty() ? "No player specified" : o}});
+        return true;
+    }
+    if (action == "listBans") {
+        json list, bans = json::array();
+        astroListPlayers(list);
+        for (auto& p : list)
+            if (jstr(p, "playerCategory") == "Blacklisted")
+                bans.push_back(json{{"player", {{"gameId", astroGuid(p)}, {"name", jstr(p, "playerName")}}},
+                                    {"reason", ""}, {"expiresAt", nullptr}});
+        sendResponse(requestId, bans);
+        return true;
+    }
+    if (action == "shutdown") {
+        sendResponse(requestId, json{{"success",true}});
+        astroShutdownAsync();
+        return true;
+    }
+    if (action == "getPlayerInventory") { sendResponse(requestId, json::array()); return true; }
+    if (action == "sendMessage" || action == "getPlayerLocation" || action == "giveItem" || action == "teleportPlayer") {
+        sendResponse(requestId, json{{"success",false},{"error","Astroneer's server console has no " + action}});
+        return true;
+    }
+    return false;
+}
+
 void handleRequest(const std::string& requestId, const json& payload) {
     std::string action = jstr(payload, "action");
     json args = json::object();
@@ -586,6 +965,8 @@ void handleRequest(const std::string& requestId, const json& payload) {
         else if (ra.is_object()) args = ra;
     }
     logmsg("Request: " + action + " (" + requestId + ")");
+
+    if (g_astro && handleAstroRequest(requestId, action, args)) return;
 
     if (action == "testReachability") { sendResponse(requestId, json{{"connectable",true}}); return; }
 
@@ -707,15 +1088,22 @@ void drainEvents() {
         if (data.contains("player") && data["player"].is_object() && data["player"].contains("steamId"))
             data["player"]["steamId"] = toSteamId64(data["player"]["steamId"].get<std::string>());
         if (type == "log") { sendLog(data.value("msg", "")); continue; }
+        // Astroneer: join/leave come from the RCON roster, not the Lua PlayerState diff.
+        if (g_astro && (type == "player-connected" || type == "player-disconnected")) continue;
         sendEvent(type, data);
     }
 }
 
 void pollLoop() {
+    int sinceRoster = ROSTER_POLL_MS;
     while (g_running) {
+        if (g_astro) {
+            sinceRoster += POLL_INTERVAL_MS;
+            if (sinceRoster >= ROSTER_POLL_MS) { sinceRoster = 0; astroPollRoster(); }
+        }
         if (g_connected) {
             if (!g_startupSent) { g_startupSent = true; sendLog(SERVER_STARTED_MSG); }
-            refreshPlayers();
+            if (!g_astro) refreshPlayers();
             drainEvents();
         }
         Sleep(POLL_INTERVAL_MS);
@@ -728,15 +1116,15 @@ void handleMessage(const json& msg) {
     if (type == "identifyResponse") {
         if (msg.contains("payload") && msg["payload"].is_object() && msg["payload"].contains("error"))
             logmsg("Identify failed: " + msg["payload"]["error"].dump());
-        else { logmsg("Identified with Takaro"); g_connected = true; }
+        else { logmsg("Identified with hub " + g_wsHost + ":" + std::to_string(g_wsPort)); g_connected = true; }
     } else if (type == "connected") {
-        logmsg("Takaro confirmed connection");
+        logmsg("Hub confirmed connection");
     } else if (type == "ping") {
         wsSend(json{{"type","pong"}});
     } else if (type == "request") {
         handleRequest(msg.value("requestId", ""), msg.contains("payload") ? msg["payload"] : json::object());
     } else if (type == "error") {
-        logmsg("Takaro error: " + (msg.contains("payload") ? msg["payload"].dump() : msg.dump()));
+        logmsg("Hub error: " + (msg.contains("payload") ? msg["payload"].dump() : msg.dump()));
     } else if (type != "response") {
         logmsg("Unknown msg: " + type);
     }
@@ -748,12 +1136,13 @@ bool wsRunOnce() {
     g_wsSession = WinHttpOpen(L"ServerManagerTakaro", WINHTTP_ACCESS_TYPE_NO_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!g_wsSession) return false;
-    g_wsConn = WinHttpConnect(g_wsSession, TAKARO_WS_HOST, TAKARO_WS_PORT, 0);
+    std::wstring whost(g_wsHost.begin(), g_wsHost.end()), wpath(g_wsPath.begin(), g_wsPath.end());
+    g_wsConn = WinHttpConnect(g_wsSession, whost.c_str(), (INTERNET_PORT)g_wsPort, 0);
     if (!g_wsConn) { WinHttpCloseHandle(g_wsSession); g_wsSession = NULL; return false; }
 
-    HINTERNET req = WinHttpOpenRequest(g_wsConn, L"GET", L"/", NULL, WINHTTP_NO_REFERER,
+    HINTERNET req = WinHttpOpenRequest(g_wsConn, L"GET", wpath.c_str(), NULL, WINHTTP_NO_REFERER,
                                        WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                       TAKARO_WS_SECURE ? WINHTTP_FLAG_SECURE : 0);
+                                       g_wsSecure ? WINHTTP_FLAG_SECURE : 0);
     bool ok = req &&
         WinHttpSetOption(req, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0) &&
         WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0) &&
@@ -814,8 +1203,9 @@ static int tcpConnect(const char* host, int port) {
 }
 
 bool wsRunOnce() {
-    const char* host = TAKARO_WS_HOST_A;
-    int fd = tcpConnect(host, TAKARO_WS_PORT);
+    // TLS only on Linux: a plain ws:// WS_URL still gets a TLS handshake here.
+    const char* host = g_wsHost.c_str();
+    int fd = tcpConnect(host, g_wsPort);
     if (fd < 0) { logmsg("WS: TCP connect failed"); return false; }
 
     g_sslCtx = SSL_CTX_new(TLS_client_method());
@@ -840,7 +1230,7 @@ bool wsRunOnce() {
     // don't need to validate for a client). Read the response headers byte-by-byte so we
     // never consume bytes belonging to the first data frame.
     std::string req =
-        std::string("GET / HTTP/1.1\r\nHost: ") + host + "\r\n"
+        std::string("GET ") + g_wsPath + " HTTP/1.1\r\nHost: " + host + "\r\n"
         "Upgrade: websocket\r\nConnection: Upgrade\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
     if (!sslWriteAll(req.data(), req.size())) { logmsg("WS: upgrade send failed"); }
@@ -915,6 +1305,14 @@ void coreBoot() {
     computePaths();
     loadConfig();
     if (!ENABLED) { logmsg("TakaroConnector disabled (ENABLED=false)"); return; }
+#ifdef _WIN32
+    {
+        char exe[MAX_PATH]; GetModuleFileNameA(NULL, exe, MAX_PATH);
+        if (RCON_PROTOCOL == "astroneer" || strstr(exe, "AstroServer")) g_astro = true;
+    }
+#else
+    if (RCON_PROTOCOL == "astroneer") g_astro = true;
+#endif
     logmsg("ServerManager-Takaro core (in-DLL) started — mod=" + g_modDir);
     std::thread(wsLoop).detach();
     std::thread(pollLoop).detach();
